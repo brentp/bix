@@ -75,8 +75,8 @@ func New(path string, workers ...int) (*Bix, error) {
 	return tbx, nil
 }
 
-// BixReader is return from Bix.Query() it meets the io.Reader interface
-type BixReader struct {
+// bixReader is return from Bix.Query() it meets the io.Reader interface
+type bixReader struct {
 	startCol int
 	endCol   int
 	maxCol   int
@@ -92,7 +92,7 @@ type BixReader struct {
 }
 
 func newReader(tbx *Bix, cr *index.ChunkReader, start, end int) (io.Reader, error) {
-	r := &BixReader{}
+	r := &bixReader{}
 	r.startCol = int(tbx.BeginColumn - 1)
 	r.endCol = int(tbx.EndColumn - 1)
 	r.maxCol = r.endCol
@@ -116,7 +116,7 @@ func newReader(tbx *Bix, cr *index.ChunkReader, start, end int) (io.Reader, erro
 }
 
 // Read from a BixReader (will contain only overlapping intervals).
-func (r *BixReader) Read(p []byte) (int, error) {
+func (r *bixReader) Read(p []byte) (int, error) {
 	var readErr error
 	var line string
 
