@@ -220,6 +220,6 @@ func (tbx *Bix) Query(chrom string, start int, end int) (io.Reader, error) {
 }
 
 // Close closes the files associate with a Bix struct.
-func (t *Bix) Close() {
-	t.bgzf.Close()
+func (tbx *Bix) Close() {
+	tbx.bgzf.Close()
 }
