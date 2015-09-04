@@ -3,6 +3,9 @@ bix
 
 Tabix files in go.
 
+[![GoDoc] (https://godoc.org/github.com/brentp/bix?status.png)](https://godoc.org/github.com/brentp/bix)
+
+
 ```go
 tbx, err := bix.New(f)
 
