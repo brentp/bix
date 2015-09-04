@@ -38,7 +38,7 @@ func main() {
 	e, err := strconv.Atoi(os.Args[4])
 	check(err)
 
-	rdr, err := tbx.Query(chrom, s, e)
+	rdr, err := tbx.Query(chrom, s, e, true)
 	check(err)
 	bufr := bufio.NewReader(rdr)
 	for {
@@ -47,7 +47,7 @@ func main() {
 			break
 		}
 		check(err)
-		fmt.Println(v[:min(len(v), 50)])
+		fmt.Println(v[:min(len(v), 20)])
 	}
 	tbx.Close()
 

@@ -34,8 +34,9 @@ func (s location) End() int {
 // Bix provides read access to tabix files.
 type Bix struct {
 	*tabix.Index
-	bgzf *bgzf.Reader
-	path string
+	bgzf   *bgzf.Reader
+	path   string
+	Header string
 }
 
 // New returns a &Bix
@@ -70,7 +71,24 @@ func New(path string, workers ...int) (*Bix, error) {
 		return nil, err
 	}
 
+	buf := bufio.NewReader(bgz)
+	h := make([]string, 0)
 	tbx := &Bix{bgzf: bgz, path: path}
+
+	l, err := buf.ReadString('\n')
+	if err != nil {
+		return tbx, err
+	}
+
+	for i := 0; i < int(idx.Skip) || rune(l[0]) == idx.MetaChar; i++ {
+		h = append(h, l)
+		l, err = buf.ReadString('\n')
+		if err != nil {
+			return tbx, err
+		}
+	}
+	tbx.Header = strings.Join(h, "")
+
 	tbx.Index = idx
 	return tbx, nil
 }
@@ -206,7 +224,7 @@ func (r *bixReader) Read(p []byte) (int, error) {
 }
 
 // Query a Bix struct with genomic coordinates. Returns an io.Reader.
-func (tbx *Bix) Query(chrom string, start int, end int) (io.Reader, error) {
+func (tbx *Bix) Query(chrom string, start int, end int, printHeader bool) (io.Reader, error) {
 	chunks, err := tbx.Chunks(location{chrom: chrom, start: start, end: end})
 	if err != nil {
 		return nil, err
@@ -216,7 +234,11 @@ func (tbx *Bix) Query(chrom string, start int, end int) (io.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newReader(tbx, chunkReader, start, end)
+	rdr, err := newReader(tbx, chunkReader, start, end)
+	if printHeader {
+		rdr.(*bixReader).buf = []byte(tbx.Header)
+	}
+	return rdr, err
 }
 
 // Close closes the files associate with a Bix struct.
