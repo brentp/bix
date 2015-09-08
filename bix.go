@@ -154,6 +154,7 @@ func (r *bixReader) Read(p []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
+
 		pos := s + r.add
 		if pos >= r.end {
 			readErr = io.EOF
@@ -170,15 +171,17 @@ func (r *bixReader) Read(p []byte) (int, error) {
 			}
 		} else if r.isVCF {
 			alt := strings.Split(toks[4], ",")
-			lref := len(toks[5])
-			maxEnd := pos + 2
+			lref := len(toks[3])
+			maxEnd := pos + lref
+			//log.Println(maxEnd, r.start, lref, toks[3], toks[4])
 			anyLess := true
-			if maxEnd <= r.start {
+			if r.start >= maxEnd {
 				anyLess = false
 				for _, a := range alt {
 					if a[0] != '<' {
 						e := pos + lref
-						if e >= r.start {
+						if e > r.start {
+							//log.Println("true")
 							anyLess = true
 							break
 						}
