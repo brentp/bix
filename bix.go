@@ -78,11 +78,17 @@ func New(path string, workers ...int) (*Bix, error) {
 		return nil, err
 	}
 	bgz, err := bgzf.NewReader(b, n)
+	bgz.Blocked = false
 	if err != nil {
 		return nil, err
 	}
 
-	buf := bufio.NewReader(bgz)
+	/*
+		c := cache.NewFIFO(4)
+		bgz.SetCache(c)
+	*/
+
+	buf := bufio.NewReaderSize(bgz, 16384/2)
 	h := make([]string, 0)
 	tbx := &Bix{bgzf: bgz, path: path}
 
@@ -229,8 +235,11 @@ func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 			log.Println(err)
 			break
 		}
-		if len(line) == 0 && err == io.EOF {
+		if len(line) == 0 || (err == io.EOF && line[len(line)-1] != '\n') {
 			break
+		}
+		if err != nil {
+			log.Println(err)
 		}
 		in, rerr, toks := br.inBounds(line)
 		if !in {
@@ -295,6 +304,7 @@ func (r *bixReader) Read(p []byte) (int, error) {
 				break
 			}
 		} else if readErr != nil {
+			log.Println(readErr)
 			break
 		}
 		var in bool
@@ -312,10 +322,15 @@ func (r *bixReader) Read(p []byte) (int, error) {
 	if len(r.buf) >= len(p) {
 		copy(p, r.buf[:len(p)])
 		r.buf = r.buf[len(p):]
+		if len(r.buf) > 0 && readErr == io.EOF {
+			readErr = nil
+		}
 		return len(p), readErr
 	}
 	copy(p, r.buf)
-	return len(r.buf), readErr
+	l := len(r.buf)
+	r.buf = r.buf[:0]
+	return l, readErr
 }
 
 func (tbx *Bix) chunkedReader(l location) (io.Reader, error) {
