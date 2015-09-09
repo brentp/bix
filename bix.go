@@ -266,47 +266,8 @@ func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 
 }
 
-type generic struct {
-	chrom   string
-	start   int
-	end     int
-	related []interfaces.Relatable
-	source  uint32
-	Fields  []string
-}
-
-func (g *generic) Chrom() string {
-	return g.chrom
-}
-
-func (g *generic) Start() uint32 {
-	return uint32(g.start)
-}
-
-func (g *generic) End() uint32 {
-	return uint32(g.end)
-}
-
-func (g *generic) Source() uint32 {
-	return g.source
-}
-
-func (g *generic) SetSource(src uint32) {
-	g.source = src
-}
-
-func (g *generic) Related() []interfaces.Relatable {
-	return g.related
-}
-
-func (g *generic) AddRelated(o interfaces.Relatable) {
-	if g.related == nil {
-		g.related = make([]interfaces.Relatable, 0)
-	}
-	g.related = append(g.related, o)
-}
-
-func newgeneric(fields []string, chromCol int, startCol int, endCol int, zeroBased bool) (*generic, error) {
+// return an interval using the info from the tabix index
+func newgeneric(fields []string, chromCol int, startCol int, endCol int, zeroBased bool) (*parsers.Interval, error) {
 	s, err := strconv.Atoi(fields[startCol])
 	if err != nil {
 		return nil, err
@@ -318,7 +279,8 @@ func newgeneric(fields []string, chromCol int, startCol int, endCol int, zeroBas
 	if err != nil {
 		return nil, err
 	}
-	return &generic{chrom: fields[chromCol], start: s, end: e, Fields: fields}, nil
+
+	return parsers.NewInterval(fields[chromCol], uint32(s), uint32(e), fields, uint32(0), nil), nil
 }
 
 // Read from a BixReader (will contain only overlapping intervals).
@@ -389,4 +351,11 @@ func (tbx *Bix) Query(chrom string, start int, end int, printHeader bool) (io.Re
 // Close closes the files associate with a Bix struct.
 func (tbx *Bix) Close() {
 	tbx.bgzf.Close()
+}
+
+func (tbx *Bix) AddInfoToHeader(id, number, vtype, desc string) {
+	if tbx.vReader == nil {
+		return
+	}
+	tbx.vReader.AddInfoToHeader(id, number, vtype, desc)
 }
