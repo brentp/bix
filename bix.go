@@ -13,6 +13,15 @@ import (
 	"github.com/biogo/hts/bgzf"
 	"github.com/biogo/hts/bgzf/index"
 	"github.com/biogo/hts/tabix"
+	"github.com/brentp/irelate/interfaces"
+	"github.com/brentp/irelate/parsers"
+	"github.com/brentp/vcfgo"
+)
+
+const (
+	VCF = iota
+	BED
+	GENERIC
 )
 
 type location struct {
@@ -37,6 +46,8 @@ type Bix struct {
 	bgzf   *bgzf.Reader
 	path   string
 	Header string
+
+	vReader *vcfgo.Reader
 }
 
 // New returns a &Bix
@@ -89,6 +100,15 @@ func New(path string, workers ...int) (*Bix, error) {
 	}
 	tbx.Header = strings.Join(h, "")
 
+	if len(h) > 0 && strings.HasSuffix(tbx.path, ".vcf.gz") {
+		rdr := strings.NewReader(tbx.Header)
+		var err error
+		tbx.vReader, err = vcfgo.NewReader(rdr, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	tbx.Index = idx
 	return tbx, nil
 }
@@ -133,28 +153,28 @@ func newReader(tbx *Bix, cr *index.ChunkReader, start, end int) (io.Reader, erro
 	return r, nil
 }
 
-func (r *bixReader) inBounds(line string) (bool, error) {
+func (r *bixReader) inBounds(line string) (bool, error, []string) {
 
 	var readErr error
 	toks := strings.SplitN(line, "\t", r.maxCol+1)
 
 	s, err := strconv.Atoi(toks[r.startCol])
 	if err != nil {
-		return false, err
+		return false, err, toks
 	}
 
 	pos := s + r.add
 	if pos >= r.end {
-		return false, io.EOF
+		return false, io.EOF, toks
 	}
 
 	if r.endCol != -1 {
 		e, err := strconv.Atoi(toks[r.endCol])
 		if err != nil {
-			return false, err
+			return false, err, toks
 		}
 		if e < r.start {
-			return false, readErr
+			return false, readErr, toks
 		}
 	} else if r.isVCF {
 		alt := strings.Split(toks[4], ",")
@@ -166,7 +186,7 @@ func (r *bixReader) inBounds(line string) (bool, error) {
 					e := pos + lref
 					if e > r.start {
 						//log.Println("true")
-						return true, readErr
+						return true, readErr, toks
 					}
 				} else if strings.HasPrefix(a, "<DEL") || strings.HasPrefix(a, "<DUP") || strings.HasPrefix(a, "<INV") || strings.HasPrefix(a, "<CN") {
 					info := toks[7]
@@ -174,10 +194,10 @@ func (r *bixReader) inBounds(line string) (bool, error) {
 						v := info[idx+5 : idx+5+strings.Index(info[idx+5:], ";")]
 						e, err := strconv.Atoi(v)
 						if err != nil {
-							return false, err
+							return false, err, toks
 						}
 						if e > r.start {
-							return true, readErr
+							return true, readErr, toks
 						}
 					} else {
 						log.Println("no end")
@@ -185,12 +205,120 @@ func (r *bixReader) inBounds(line string) (bool, error) {
 				}
 			}
 		} else {
-			return true, readErr
+			return true, readErr, toks
 		}
-		return false, readErr
+		return false, readErr, toks
 	}
-	return false, readErr
+	return false, readErr, toks
 
+}
+
+func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
+	overlaps := make([]interfaces.IPosition, 0)
+	chunkReader, err := tbx.chunkedReader(location{q.Chrom(), int(q.Start()), int(q.End())})
+	if err != nil {
+		return overlaps
+	}
+	br := chunkReader.(*bixReader)
+	isVCF := tbx.vReader != nil
+	isBED := tbx.Index.NameColumn == 1 && tbx.Index.BeginColumn == 2 && tbx.Index.EndColumn == 3
+	for {
+		line, err := br.rdr.ReadString('\n')
+
+		if err != nil && err != io.EOF {
+			log.Println(err)
+			break
+		}
+		if len(line) == 0 && err == io.EOF {
+			break
+		}
+		in, rerr, toks := br.inBounds(line)
+		if !in {
+			if rerr == io.EOF {
+				break
+			}
+			continue
+		}
+
+		if isVCF {
+			v := tbx.vReader.Parse(toks)
+			if v != nil {
+				overlaps = append(overlaps, v)
+			}
+		} else if isBED {
+			v, e := parsers.IntervalFromBedLine(line)
+			if e != nil {
+				overlaps = append(overlaps, v)
+			}
+		} else {
+
+			g, e := newgeneric(toks, int(tbx.Index.NameColumn-1), br.startCol, br.endCol, tbx.Index.ZeroBased)
+			if e != nil {
+				overlaps = append(overlaps, g)
+			}
+
+		}
+		if err == io.EOF || rerr == io.EOF {
+			break
+		}
+	}
+	return overlaps
+
+}
+
+type generic struct {
+	chrom   string
+	start   int
+	end     int
+	related []interfaces.Relatable
+	source  uint32
+	Fields  []string
+}
+
+func (g *generic) Chrom() string {
+	return g.chrom
+}
+
+func (g *generic) Start() uint32 {
+	return uint32(g.start)
+}
+
+func (g *generic) End() uint32 {
+	return uint32(g.end)
+}
+
+func (g *generic) Source() uint32 {
+	return g.source
+}
+
+func (g *generic) SetSource(src uint32) {
+	g.source = src
+}
+
+func (g *generic) Related() []interfaces.Relatable {
+	return g.related
+}
+
+func (g *generic) AddRelated(o interfaces.Relatable) {
+	if g.related == nil {
+		g.related = make([]interfaces.Relatable, 0)
+	}
+	g.related = append(g.related, o)
+}
+
+func newgeneric(fields []string, chromCol int, startCol int, endCol int, zeroBased bool) (*generic, error) {
+	s, err := strconv.Atoi(fields[startCol])
+	if err != nil {
+		return nil, err
+	}
+	if !zeroBased {
+		s -= 1
+	}
+	e, err := strconv.Atoi(fields[endCol])
+	if err != nil {
+		return nil, err
+	}
+	return &generic{chrom: fields[chromCol], start: s, end: e, Fields: fields}, nil
 }
 
 // Read from a BixReader (will contain only overlapping intervals).
@@ -209,7 +337,7 @@ func (r *bixReader) Read(p []byte) (int, error) {
 		}
 		var in bool
 		var err error
-		if in, err = r.inBounds(line); in {
+		if in, err, _ = r.inBounds(line); in {
 			r.buf = append(r.buf, line...)
 		}
 		if err == io.EOF {
@@ -244,17 +372,6 @@ func (tbx *Bix) chunkedReader(l location) (io.Reader, error) {
 	}
 	return rdr, nil
 }
-
-/*
-func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
-	overlaps := make([]interfaces.IPosition, 0)
-	chunkReader, err := tbx.chunkedReader(location{q.Chrom(), int(q.Start()), int(q.End())})
-	if err != nil {
-		return overlaps
-	}
-
-}
-*/
 
 // Query a Bix struct with genomic coordinates. Returns an io.Reader.
 func (tbx *Bix) Query(chrom string, start int, end int, printHeader bool) (io.Reader, error) {
