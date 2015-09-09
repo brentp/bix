@@ -133,6 +133,66 @@ func newReader(tbx *Bix, cr *index.ChunkReader, start, end int) (io.Reader, erro
 	return r, nil
 }
 
+func (r *bixReader) inBounds(line string) (bool, error) {
+
+	var readErr error
+	toks := strings.SplitN(line, "\t", r.maxCol+1)
+
+	s, err := strconv.Atoi(toks[r.startCol])
+	if err != nil {
+		return false, err
+	}
+
+	pos := s + r.add
+	if pos >= r.end {
+		return false, io.EOF
+	}
+
+	if r.endCol != -1 {
+		e, err := strconv.Atoi(toks[r.endCol])
+		if err != nil {
+			return false, err
+		}
+		if e < r.start {
+			return false, readErr
+		}
+	} else if r.isVCF {
+		alt := strings.Split(toks[4], ",")
+		lref := len(toks[3])
+		//log.Println(maxEnd, r.start, lref, toks[3], toks[4])
+		if r.start >= pos+lref {
+			for _, a := range alt {
+				if a[0] != '<' {
+					e := pos + lref
+					if e > r.start {
+						//log.Println("true")
+						return true, readErr
+					}
+				} else if strings.HasPrefix(a, "<DEL") || strings.HasPrefix(a, "<DUP") || strings.HasPrefix(a, "<INV") || strings.HasPrefix(a, "<CN") {
+					info := toks[7]
+					if idx := strings.Index(info, ";END="); idx != -1 {
+						v := info[idx+5 : idx+5+strings.Index(info[idx+5:], ";")]
+						e, err := strconv.Atoi(v)
+						if err != nil {
+							return false, err
+						}
+						if e > r.start {
+							return true, readErr
+						}
+					} else {
+						log.Println("no end")
+					}
+				}
+			}
+		} else {
+			return true, readErr
+		}
+		return false, readErr
+	}
+	return false, readErr
+
+}
+
 // Read from a BixReader (will contain only overlapping intervals).
 func (r *bixReader) Read(p []byte) (int, error) {
 	var readErr error
@@ -145,90 +205,31 @@ func (r *bixReader) Read(p []byte) (int, error) {
 				break
 			}
 		} else if readErr != nil {
-			return 0, readErr
-		}
-
-		toks := strings.SplitN(line, "\t", r.maxCol+1)
-
-		s, err := strconv.Atoi(toks[r.startCol])
-		if err != nil {
-			return 0, err
-		}
-
-		pos := s + r.add
-		if pos >= r.end {
-			readErr = io.EOF
 			break
 		}
-
-		if r.endCol != -1 {
-			e, err := strconv.Atoi(toks[r.endCol])
-			if err != nil {
-				return 0, err
-			}
-			if e < r.start {
-				continue
-			}
-		} else if r.isVCF {
-			alt := strings.Split(toks[4], ",")
-			lref := len(toks[3])
-			maxEnd := pos + lref
-			//log.Println(maxEnd, r.start, lref, toks[3], toks[4])
-			anyLess := true
-			if r.start >= maxEnd {
-				anyLess = false
-				for _, a := range alt {
-					if a[0] != '<' {
-						e := pos + lref
-						if e > r.start {
-							//log.Println("true")
-							anyLess = true
-							break
-						}
-					} else if strings.HasPrefix(a, "<DEL") || strings.HasPrefix(a, "<DUP") || strings.HasPrefix(a, "<INV") || strings.HasPrefix(a, "<CN") {
-						info := toks[7]
-						if idx := strings.Index(info, ";END="); idx != -1 {
-							v := info[idx+5 : idx+5+strings.Index(info[idx+5:], ";")]
-							e, err := strconv.Atoi(v)
-							if err != nil {
-								return 0, err
-							}
-							if e > maxEnd {
-								maxEnd = e
-							}
-						} else {
-							log.Println("no end")
-						}
-					} else {
-						if pos+lref > maxEnd {
-							maxEnd = pos + lref
-						}
-					}
-					if maxEnd > r.start {
-						anyLess = true
-						break
-					}
-				}
-			}
-			if !anyLess {
-				continue
-			}
+		var in bool
+		var err error
+		if in, err = r.inBounds(line); in {
+			r.buf = append(r.buf, line...)
 		}
-
-		r.buf = append(r.buf, line...)
+		if err == io.EOF {
+			readErr = err
+			break
+		} else if err != nil {
+			log.Println(err)
+		}
 	}
 	if len(r.buf) >= len(p) {
 		copy(p, r.buf[:len(p)])
 		r.buf = r.buf[len(p):]
-		return len(p), nil
+		return len(p), readErr
 	}
 	copy(p, r.buf)
 	return len(r.buf), readErr
 }
 
-// Query a Bix struct with genomic coordinates. Returns an io.Reader.
-func (tbx *Bix) Query(chrom string, start int, end int, printHeader bool) (io.Reader, error) {
-	chunks, err := tbx.Chunks(location{chrom: chrom, start: start, end: end})
+func (tbx *Bix) chunkedReader(l location) (io.Reader, error) {
+	chunks, err := tbx.Chunks(l)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +238,31 @@ func (tbx *Bix) Query(chrom string, start int, end int, printHeader bool) (io.Re
 	if err != nil {
 		return nil, err
 	}
-	rdr, err := newReader(tbx, chunkReader, start, end)
+	rdr, err := newReader(tbx, chunkReader, l.start, l.end)
+	if err != nil {
+		return nil, err
+	}
+	return rdr, nil
+}
+
+/*
+func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
+	overlaps := make([]interfaces.IPosition, 0)
+	chunkReader, err := tbx.chunkedReader(location{q.Chrom(), int(q.Start()), int(q.End())})
+	if err != nil {
+		return overlaps
+	}
+
+}
+*/
+
+// Query a Bix struct with genomic coordinates. Returns an io.Reader.
+func (tbx *Bix) Query(chrom string, start int, end int, printHeader bool) (io.Reader, error) {
+
+	rdr, err := tbx.chunkedReader(location{chrom: chrom, start: start, end: end})
+	if err != nil {
+		return nil, err
+	}
 	if printHeader {
 		rdr.(*bixReader).buf = []byte(tbx.Header)
 	}
