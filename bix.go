@@ -47,7 +47,11 @@ type Bix struct {
 	path   string
 	Header string
 
-	vReader *vcfgo.Reader
+	vReader   *vcfgo.Reader
+	lastChunk *bgzf.Chunk
+	cache     []interfaces.IPosition
+
+	UseCache bool
 }
 
 // New returns a &Bix
@@ -90,7 +94,8 @@ func New(path string, workers ...int) (*Bix, error) {
 
 	buf := bufio.NewReaderSize(bgz, 16384/2)
 	h := make([]string, 0)
-	tbx := &Bix{bgzf: bgz, path: path}
+	tbx := &Bix{bgzf: bgz, path: path, cache: make([]interfaces.IPosition, 0, 4000),
+		UseCache: false}
 
 	l, err := buf.ReadString('\n')
 	if err != nil {
@@ -191,7 +196,6 @@ func (r *bixReader) inBounds(line string) (bool, error, []string) {
 				if a[0] != '<' {
 					e := pos + lref
 					if e > r.start {
-						//log.Println("true")
 						return true, readErr, toks
 					}
 				} else if strings.HasPrefix(a, "<DEL") || strings.HasPrefix(a, "<DUP") || strings.HasPrefix(a, "<INV") || strings.HasPrefix(a, "<CN") {
@@ -219,6 +223,26 @@ func (r *bixReader) inBounds(line string) (bool, error, []string) {
 
 }
 
+func (tbx *Bix) fillCache(br *bixReader) {
+	if len(tbx.cache) != 0 {
+		return
+	}
+	for {
+		line, err := br.rdr.ReadString('\n')
+		if err != nil && err != io.EOF {
+			log.Println(err)
+			return
+		}
+		if len(line) == 0 || (err == io.EOF && line[len(line)-1] != '\n') {
+			return
+		}
+		toks := strings.SplitN(line, "\t", br.maxCol)
+		ip := tbx.toPosition(toks)
+		tbx.cache = append(tbx.cache, ip)
+	}
+
+}
+
 func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 	overlaps := make([]interfaces.IPosition, 0)
 	chunkReader, err := tbx.chunkedReader(location{q.Chrom(), int(q.Start()), int(q.End())})
@@ -226,53 +250,76 @@ func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 		return overlaps
 	}
 	br := chunkReader.(*bixReader)
-	isVCF := tbx.vReader != nil
-	isBED := tbx.Index.NameColumn == 1 && tbx.Index.BeginColumn == 2 && tbx.Index.EndColumn == 3
-	for {
-		line, err := br.rdr.ReadString('\n')
 
-		if err != nil && err != io.EOF {
-			log.Println(err)
-			break
-		}
-		if len(line) == 0 || (err == io.EOF && line[len(line)-1] != '\n') {
-			break
-		}
-		if err != nil {
-			log.Println(err)
-		}
-		in, rerr, toks := br.inBounds(line)
-		if !in {
-			if rerr == io.EOF {
+	var k, skip, hit int
+	for {
+		if tbx.UseCache {
+			if len(tbx.cache) == 0 {
+				tbx.fillCache(br)
+			}
+			if k >= len(tbx.cache) {
 				break
 			}
-			continue
-		}
-
-		if isVCF {
-			v := tbx.vReader.Parse(toks)
+			v := tbx.cache[k]
 			if v != nil {
-				overlaps = append(overlaps, v)
+				//log.Printf("hitting cache: %s:%d-%d %s:%d-%d", q.Chrom(), q.Start(), q.End(), v.Chrom(), v.Start(), v.End())
+				if interfaces.OverlapsPosition(v, q) {
+					overlaps = append(overlaps, v)
+				} else if v.Start() >= q.End() {
+					break
+				}
 			}
-		} else if isBED {
-			v, e := parsers.IntervalFromBedLine(line)
-			if e != nil {
-				overlaps = append(overlaps, v)
-			}
+			k += 1
 		} else {
+			line, err := br.rdr.ReadString('\n')
 
-			g, e := newgeneric(toks, int(tbx.Index.NameColumn-1), br.startCol, br.endCol, tbx.Index.ZeroBased)
-			if e != nil {
-				overlaps = append(overlaps, g)
+			if err != nil && err != io.EOF {
+				log.Println(err)
+				break
 			}
+			if len(line) == 0 || (err == io.EOF && line[len(line)-1] != '\n') {
+				break
+			}
+			k += 1
+			if err != nil {
+				log.Println(err)
+			}
+			in, rerr, toks := br.inBounds(line)
 
-		}
-		if err == io.EOF || rerr == io.EOF {
-			break
+			if !in {
+				if rerr == io.EOF {
+					break
+				}
+				continue
+			}
+			ip := tbx.toPosition(toks)
+			if ip != nil {
+				overlaps = append(overlaps, ip)
+			}
+			if err == io.EOF || rerr == io.EOF {
+				break
+			}
 		}
 	}
+	//log.Println(fmt.Sprintf("total: %d, hits: %d, misses: %d", k, hit, skip))
+	_ = skip
+	_ = hit
 	return overlaps
 
+}
+
+func (tbx *Bix) toPosition(toks []string) interfaces.IPosition {
+	isVCF := tbx.vReader != nil
+
+	if isVCF {
+		v := tbx.vReader.Parse(toks)
+		return v
+	} else {
+
+		g, _ := newgeneric(toks, int(tbx.Index.NameColumn-1), int(tbx.Index.BeginColumn-1),
+			int(tbx.Index.EndColumn-1), tbx.Index.ZeroBased)
+		return g
+	}
 }
 
 // return an interval using the info from the tabix index
@@ -338,6 +385,10 @@ func (tbx *Bix) chunkedReader(l location) (io.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
+	if tbx.UseCache && len(chunks) > 0 && (tbx.lastChunk == nil || (len(chunks) > 0 && (tbx.lastChunk.Begin.File != chunks[0].Begin.File || tbx.lastChunk.Begin.Block != chunks[0].Begin.Block))) {
+		(*tbx).lastChunk = &chunks[0]
+		tbx.cache = tbx.cache[:0]
+	}
 
 	chunkReader, err := index.NewChunkReader(tbx.bgzf, chunks)
 	if err != nil {
@@ -353,7 +404,7 @@ func (tbx *Bix) chunkedReader(l location) (io.Reader, error) {
 // Query a Bix struct with genomic coordinates. Returns an io.Reader.
 func (tbx *Bix) Query(chrom string, start int, end int, printHeader bool) (io.Reader, error) {
 
-	rdr, err := tbx.chunkedReader(location{chrom: chrom, start: start, end: end})
+	rdr, err := (*tbx).chunkedReader(location{chrom: chrom, start: start, end: end})
 	if err != nil {
 		return nil, err
 	}
