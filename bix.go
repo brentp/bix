@@ -95,7 +95,7 @@ func New(path string, workers ...int) (*Bix, error) {
 	buf := bufio.NewReaderSize(bgz, 16384/2)
 	h := make([]string, 0)
 	tbx := &Bix{bgzf: bgz, path: path, cache: make([]interfaces.IPosition, 0, 4000),
-		UseCache: false}
+		UseCache: true}
 
 	l, err := buf.ReadString('\n')
 	if err != nil {
@@ -224,6 +224,12 @@ func (r *bixReader) inBounds(line string) (bool, error, []string) {
 }
 
 func (tbx *Bix) fillCache(br *bixReader) {
+	// this is a naive cache. It just parses the entire chunk.
+	// Even if we only read up to the requested location, then
+	// a Future Bix.Get() call would have a new reader and it would
+	// have to bgzf.Read() again through the block, past what we already
+	// knew. We could do one big Read(), then just parse each time, but
+	// this version actually works quite well.
 	if len(tbx.cache) != 0 {
 		return
 	}
