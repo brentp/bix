@@ -10,8 +10,13 @@ import gzip
 
 F = sys.argv[1] if len(sys.argv) > 1 else "NA12878.wham.del.vcf.gz"
 
-positions = [(x.split("\t")[0], int(x.split("\t")[1])) for x in gzip.open(F) if x[0] != "#"]
-print(positions)
+positions = []
+for i, x in enumerate(gzip.open(F)):
+    if x[0] == "#": continue
+    if i > 100000: break
+    positions.append((x.split("\t")[0], int(x.split("\t")[1])))
+print(positions[:100])
+print(len(positions))
 
 p = subprocess.Popen("go build -o main main.go", shell=True)
 p.wait()

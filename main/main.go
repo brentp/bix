@@ -1,14 +1,13 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"strconv"
 
 	"github.com/brentp/bix"
+	"github.com/brentp/vcfgo"
 )
 
 func check(e error) {
@@ -22,6 +21,22 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+type loc struct {
+	chrom string
+	start int
+	end   int
+}
+
+func (s loc) Chrom() string {
+	return s.chrom
+}
+func (s loc) Start() uint32 {
+	return uint32(s.start)
+}
+func (s loc) End() uint32 {
+	return uint32(s.end)
 }
 
 func main() {
@@ -38,16 +53,9 @@ func main() {
 	e, err := strconv.Atoi(os.Args[4])
 	check(err)
 
-	rdr, err := tbx.Query(chrom, s, e, false)
-	check(err)
-	bufr := bufio.NewReader(rdr)
-	for {
-		v, err := bufr.ReadString('\n')
-		if err == io.EOF {
-			break
-		}
-		check(err)
-		fmt.Println(v[:min(len(v), 20)])
+	vals := tbx.Get(loc{chrom, s, e})
+	for i := 0; i < len(vals); i++ {
+		fmt.Println(vals[i].(*vcfgo.Variant).String()[:40])
 	}
 	tbx.Close()
 
