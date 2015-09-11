@@ -47,11 +47,23 @@ type Bix struct {
 	path   string
 	Header string
 
-	vReader   *vcfgo.Reader
-	lastChunk *bgzf.Chunk
-	cache     []interfaces.IPosition
+	vReader    *vcfgo.Reader
+	lastChunks []bgzf.Chunk
+	cache      []interfaces.IPosition
 
 	UseCache bool
+}
+
+func chunksEqual(a, b []bgzf.Chunk) bool {
+	if len(a) != len(b) || len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // New returns a &Bix
@@ -257,7 +269,7 @@ func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 	}
 	br := chunkReader.(*bixReader)
 
-	var k, skip, hit int
+	var k int
 	for {
 		if tbx.UseCache {
 			if len(tbx.cache) == 0 {
@@ -307,9 +319,6 @@ func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 			}
 		}
 	}
-	//log.Println(fmt.Sprintf("total: %d, hits: %d, misses: %d", k, hit, skip))
-	_ = skip
-	_ = hit
 	return overlaps
 
 }
@@ -391,8 +400,8 @@ func (tbx *Bix) chunkedReader(l location) (io.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	if tbx.UseCache && len(chunks) > 0 && (tbx.lastChunk == nil || (len(chunks) > 0 && (tbx.lastChunk.Begin.File != chunks[0].Begin.File || tbx.lastChunk.Begin.Block != chunks[0].Begin.Block))) {
-		(*tbx).lastChunk = &chunks[0]
+	if tbx.UseCache && len(chunks) > 0 && !chunksEqual(chunks, tbx.lastChunks) {
+		(*tbx).lastChunks = chunks
 		tbx.cache = tbx.cache[:0]
 	}
 
