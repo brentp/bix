@@ -50,8 +50,6 @@ type Bix struct {
 	vReader    *vcfgo.Reader
 	lastChunks []bgzf.Chunk
 	cache      []interfaces.IPosition
-
-	UseCache bool
 }
 
 func chunksEqual(a, b []bgzf.Chunk) bool {
@@ -106,8 +104,7 @@ func New(path string, workers ...int) (*Bix, error) {
 
 	buf := bufio.NewReaderSize(bgz, 16384/2)
 	h := make([]string, 0)
-	tbx := &Bix{bgzf: bgz, path: path, cache: make([]interfaces.IPosition, 0, 4000),
-		UseCache: true}
+	tbx := &Bix{bgzf: bgz, path: path, cache: make([]interfaces.IPosition, 0, 4000)}
 
 	l, err := buf.ReadString('\n')
 	if err != nil {
@@ -202,7 +199,6 @@ func (r *bixReader) inBounds(line string) (bool, error, []string) {
 	} else if r.isVCF {
 		alt := strings.Split(toks[4], ",")
 		lref := len(toks[3])
-		//log.Println(maxEnd, r.start, lref, toks[3], toks[4])
 		if r.start >= pos+lref {
 			for _, a := range alt {
 				if a[0] != '<' {
@@ -257,6 +253,9 @@ func (tbx *Bix) fillCache(br *bixReader) {
 		toks := strings.SplitN(line, "\t", br.maxCol)
 		ip := tbx.toPosition(toks)
 		tbx.cache = append(tbx.cache, ip)
+		if err == io.EOF {
+			break
+		}
 	}
 
 }
@@ -271,7 +270,7 @@ func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 
 	var k int
 	for {
-		if tbx.UseCache {
+		if q.End()-q.Start() < 65536/2 {
 			if len(tbx.cache) == 0 {
 				tbx.fillCache(br)
 			}
@@ -306,6 +305,7 @@ func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 
 			if !in {
 				if rerr == io.EOF {
+					err = io.EOF
 					break
 				}
 				continue
@@ -314,13 +314,12 @@ func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 			if ip != nil {
 				overlaps = append(overlaps, ip)
 			}
-			if err == io.EOF || rerr == io.EOF {
+			if err == io.EOF {
 				break
 			}
 		}
 	}
 	return overlaps
-
 }
 
 func (tbx *Bix) toPosition(toks []string) interfaces.IPosition {
@@ -400,7 +399,8 @@ func (tbx *Bix) chunkedReader(l location) (io.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	if tbx.UseCache && len(chunks) > 0 && !chunksEqual(chunks, tbx.lastChunks) {
+
+	if !chunksEqual(chunks, tbx.lastChunks) {
 		(*tbx).lastChunks = chunks
 		tbx.cache = tbx.cache[:0]
 	}
