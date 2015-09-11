@@ -13,7 +13,7 @@ F = sys.argv[1] if len(sys.argv) > 1 else "NA12878.wham.del.vcf.gz"
 positions = []
 for i, x in enumerate(gzip.open(F)):
     if x[0] == "#": continue
-    if i > 100000: break
+    if i > 2000000: break
     positions.append((x.split("\t")[0], int(x.split("\t")[1])))
 print(positions[:100])
 print(len(positions))
@@ -24,7 +24,7 @@ p.wait()
 def tbxrun(query, chrom, start, end):
     p = subprocess.Popen("tabix %s %s:%d-%d" % (query, chrom, start+1, end),
                          shell=True, stdout=subprocess.PIPE)
-    return p.stdout.read().rstrip()
+    return p#.stdout.read().rstrip()
 
 
 def btrun(query, chrom, start, end):
@@ -40,16 +40,18 @@ def btrun(query, chrom, start, end):
 def bxrun(query, chrom, start, end):
     cmd = "./main %s %s %d %d" % (query, chrom, start, end)
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-    return p.stdout.read().rstrip(), cmd
+    return p, cmd#.stdout.read().rstrip(), cmd
 
 for chrom, position in positions:
     print position
-    for j in range(position-10, position+10):
-        for l in range(1, 10):
+    for j in range(position-5, position+5):
+        for l in range(1, 3):
 
             #btres = btrun(F, '1', j, j + 5)
             bxres, cmd = bxrun(F, chrom, j, j + l)
             tbres = tbxrun(F, chrom, j, j + l)
+            bxres = bxres.stdout.read().rstrip()
+            tbres = tbres.stdout.read().rstrip()
 
             #lbt = len(btres.split("\n"))
             lbx = len(bxres.split("\n"))

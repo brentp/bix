@@ -241,7 +241,8 @@ func (tbx *Bix) fillCache(br *bixReader) {
 	if len(tbx.cache) != 0 {
 		return
 	}
-	for {
+	var err error
+	for err == nil {
 		line, err := br.rdr.ReadString('\n')
 		if err != nil && err != io.EOF {
 			log.Println(err)
@@ -253,9 +254,6 @@ func (tbx *Bix) fillCache(br *bixReader) {
 		toks := strings.SplitN(line, "\t", br.maxCol)
 		ip := tbx.toPosition(toks)
 		tbx.cache = append(tbx.cache, ip)
-		if err == io.EOF {
-			break
-		}
 	}
 
 }
@@ -269,11 +267,11 @@ func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 	br := chunkReader.(*bixReader)
 
 	var k int
+	if len(tbx.cache) == 0 && q.End()-q.Start() < 65536/2 {
+		tbx.fillCache(br)
+	}
 	for {
 		if q.End()-q.Start() < 65536/2 {
-			if len(tbx.cache) == 0 {
-				tbx.fillCache(br)
-			}
 			if k >= len(tbx.cache) {
 				break
 			}
