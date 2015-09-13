@@ -159,7 +159,7 @@ func newReader(tbx *Bix, cr *index.ChunkReader, start, end int) (io.Reader, erro
 	}
 	r.start = start
 	r.end = end
-	r.maxCol += 1
+	r.maxCol += 2
 	if !tbx.ZeroBased {
 		r.add = -1
 	}
@@ -267,17 +267,18 @@ func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 	br := chunkReader.(*bixReader)
 
 	var k int
-	if len(tbx.cache) == 0 && q.End()-q.Start() < 65536/2 {
+	sizeCutoff := uint32(65536 / 2)
+
+	if len(tbx.cache) == 0 && q.End()-q.Start() < sizeCutoff {
 		tbx.fillCache(br)
 	}
 	for {
-		if q.End()-q.Start() < 65536/2 {
+		if q.End()-q.Start() < sizeCutoff {
 			if k >= len(tbx.cache) {
 				break
 			}
 			v := tbx.cache[k]
 			if v != nil {
-				//log.Printf("hitting cache: %s:%d-%d %s:%d-%d", q.Chrom(), q.Start(), q.End(), v.Chrom(), v.Start(), v.End())
 				if interfaces.OverlapsPosition(v, q) {
 					overlaps = append(overlaps, v)
 				} else if v.Start() >= q.End() {
