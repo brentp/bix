@@ -12,6 +12,7 @@ import (
 
 	"github.com/biogo/hts/bgzf"
 	"github.com/biogo/hts/bgzf/index"
+	"github.com/biogo/hts/internal"
 	"github.com/biogo/hts/tabix"
 	"github.com/brentp/irelate/interfaces"
 	"github.com/brentp/irelate/parsers"
@@ -78,7 +79,7 @@ func New(path string, workers ...int) (*Bix, error) {
 	}
 	defer gz.Close()
 
-	idx, err := tabix.ReadTabix(gz)
+	idx, err := tabix.ReadFrom(gz)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +103,7 @@ func New(path string, workers ...int) (*Bix, error) {
 		bgz.SetCache(c)
 	*/
 
-	buf := bufio.NewReaderSize(bgz, 16384/2)
+	buf := bufio.NewReaderSize(bgz, 16384)
 	h := make([]string, 0)
 	tbx := &Bix{bgzf: bgz, path: path, cache: make([]interfaces.IPosition, 0, 4000)}
 
@@ -261,6 +262,14 @@ func (tbx *Bix) fillCache(br *bixReader) {
 func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 	overlaps := make([]interfaces.IPosition, 0)
 	chunkReader, err := tbx.chunkedReader(location{q.Chrom(), int(q.Start()), int(q.End())})
+	if err == internal.ErrNoReference {
+		if strings.HasPrefix(q.Chrom(), "chr") {
+			chunkReader, err = tbx.chunkedReader(location{q.Chrom()[3:], int(q.Start()), int(q.End())})
+		} else {
+			chunkReader, err = tbx.chunkedReader(location{"chr" + q.Chrom(), int(q.Start()), int(q.End())})
+		}
+	}
+
 	if err != nil {
 		return overlaps
 	}
