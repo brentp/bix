@@ -12,7 +12,6 @@ import (
 
 	"github.com/biogo/hts/bgzf"
 	"github.com/biogo/hts/bgzf/index"
-	"github.com/biogo/hts/internal"
 	"github.com/biogo/hts/tabix"
 	"github.com/brentp/irelate/interfaces"
 	"github.com/brentp/irelate/parsers"
@@ -262,7 +261,7 @@ func (tbx *Bix) fillCache(br *bixReader) {
 func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 	overlaps := make([]interfaces.IPosition, 0)
 	chunkReader, err := tbx.chunkedReader(location{q.Chrom(), int(q.Start()), int(q.End())})
-	if err == internal.ErrNoReference {
+	if err == index.ErrNoReference {
 		if strings.HasPrefix(q.Chrom(), "chr") {
 			chunkReader, err = tbx.chunkedReader(location{q.Chrom()[3:], int(q.Start()), int(q.End())})
 		} else {
