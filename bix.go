@@ -177,6 +177,7 @@ func (r *bixReader) inBounds(line string) (bool, error, []string) {
 
 	var readErr error
 	toks := strings.SplitN(line, "\t", r.maxCol+1)
+	toks[len(toks)-1] = strings.TrimRight(toks[len(toks)-1], "\r\n")
 
 	s, err := strconv.Atoi(toks[r.startCol])
 	if err != nil {
@@ -196,6 +197,7 @@ func (r *bixReader) inBounds(line string) (bool, error, []string) {
 		if e < r.start {
 			return false, readErr, toks
 		}
+		return true, readErr, toks
 	} else if r.isVCF {
 		alt := strings.Split(toks[4], ",")
 		lref := len(toks[3])
