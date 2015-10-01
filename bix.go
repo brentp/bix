@@ -143,13 +143,14 @@ type bixReader struct {
 	start int
 	end   int
 
+	cr    *index.ChunkReader
 	rdr   *bufio.Reader
 	isVCF bool
 
 	buf []byte
 }
 
-func newReader(tbx *Bix, cr *index.ChunkReader, start, end int) (io.Reader, error) {
+func newReader(tbx *Bix, cr *index.ChunkReader, start, end int) (io.ReadCloser, error) {
 	r := &bixReader{}
 	r.startCol = int(tbx.BeginColumn - 1)
 	r.endCol = int(tbx.EndColumn - 1)
@@ -164,6 +165,7 @@ func newReader(tbx *Bix, cr *index.ChunkReader, start, end int) (io.Reader, erro
 		r.add = -1
 	}
 	r.rdr = bufio.NewReader(cr)
+	r.cr = cr
 	r.buf = make([]byte, 0)
 	r.isVCF = strings.HasSuffix(tbx.path, ".vcf.gz")
 	if r.isVCF {
@@ -171,6 +173,10 @@ func newReader(tbx *Bix, cr *index.ChunkReader, start, end int) (io.Reader, erro
 	}
 
 	return r, nil
+}
+
+func (r *bixReader) Close() error {
+	return r.cr.Close()
 }
 
 func (r *bixReader) inBounds(line string) (bool, error, []string) {
@@ -263,13 +269,6 @@ func (tbx *Bix) fillCache(br *bixReader) {
 func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 	overlaps := make([]interfaces.IPosition, 0)
 	chunkReader, err := tbx.chunkedReader(location{q.Chrom(), int(q.Start()), int(q.End())})
-	if err == index.ErrNoReference {
-		if strings.HasPrefix(q.Chrom(), "chr") {
-			chunkReader, err = tbx.chunkedReader(location{q.Chrom()[3:], int(q.Start()), int(q.End())})
-		} else {
-			chunkReader, err = tbx.chunkedReader(location{"chr" + q.Chrom(), int(q.Start()), int(q.End())})
-		}
-	}
 
 	if err != nil {
 		return overlaps
@@ -403,8 +402,17 @@ func (r *bixReader) Read(p []byte) (int, error) {
 	return l, readErr
 }
 
-func (tbx *Bix) chunkedReader(l location) (io.Reader, error) {
+func (tbx *Bix) chunkedReader(l location) (io.ReadCloser, error) {
 	chunks, err := tbx.Chunks(l)
+	if err == index.ErrNoReference {
+		if strings.HasPrefix(l.chrom, "chr") {
+			l.chrom = l.chrom[3:]
+			chunks, err = tbx.Chunks(l)
+		} else {
+			l.chrom = "chr" + l.chrom
+			chunks, err = tbx.Chunks(l)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -426,7 +434,7 @@ func (tbx *Bix) chunkedReader(l location) (io.Reader, error) {
 }
 
 // Query a Bix struct with genomic coordinates. Returns an io.Reader.
-func (tbx *Bix) Query(chrom string, start int, end int, printHeader bool) (io.Reader, error) {
+func (tbx *Bix) Query(chrom string, start int, end int, printHeader bool) (io.ReadCloser, error) {
 
 	rdr, err := (*tbx).chunkedReader(location{chrom: chrom, start: start, end: end})
 	if err != nil {
