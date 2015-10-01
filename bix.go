@@ -268,7 +268,7 @@ func (tbx *Bix) fillCache(br *bixReader) {
 
 func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 	overlaps := make([]interfaces.IPosition, 0)
-	chunkReader, err := tbx.chunkedReader(location{q.Chrom(), int(q.Start()), int(q.End())})
+	chunkReader, err := tbx.ChunkedReader(location{q.Chrom(), int(q.Start()), int(q.End())}, false)
 
 	if err != nil {
 		return overlaps
@@ -402,9 +402,20 @@ func (r *bixReader) Read(p []byte) (int, error) {
 	return l, readErr
 }
 
-func (tbx *Bix) chunkedReader(l location) (io.ReadCloser, error) {
-	chunks, err := tbx.Chunks(l)
+type frdr struct {
+	io.Reader
+	h io.Reader
+	c *index.ChunkReader
+}
+
+func (x frdr) Close() error {
+	return x.c.Close()
+}
+
+func (tbx *Bix) ChunkedReader(r tabix.Record, justChunk bool) (io.ReadCloser, error) {
+	chunks, err := tbx.Chunks(r)
 	if err == index.ErrNoReference {
+		l := location{r.RefName(), r.Start(), r.End()}
 		if strings.HasPrefix(l.chrom, "chr") {
 			l.chrom = l.chrom[3:]
 			chunks, err = tbx.Chunks(l)
@@ -426,7 +437,13 @@ func (tbx *Bix) chunkedReader(l location) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	rdr, err := newReader(tbx, chunkReader, l.start, l.end)
+	if justChunk {
+
+		h := strings.NewReader(tbx.Header)
+		b := bufio.NewReader(io.MultiReader(h, chunkReader))
+		return frdr{b, h, chunkReader}, nil
+	}
+	rdr, err := newReader(tbx, chunkReader, r.Start(), r.End())
 	if err != nil {
 		return nil, err
 	}
@@ -436,7 +453,7 @@ func (tbx *Bix) chunkedReader(l location) (io.ReadCloser, error) {
 // Query a Bix struct with genomic coordinates. Returns an io.Reader.
 func (tbx *Bix) Query(chrom string, start int, end int, printHeader bool) (io.ReadCloser, error) {
 
-	rdr, err := (*tbx).chunkedReader(location{chrom: chrom, start: start, end: end})
+	rdr, err := (*tbx).ChunkedReader(location{chrom: chrom, start: start, end: end}, false)
 	if err != nil {
 		return nil, err
 	}
