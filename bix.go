@@ -52,6 +52,8 @@ type Bix struct {
 	vReader    *vcfgo.Reader
 	lastChunks []bgzf.Chunk
 	cache      []interfaces.IPosition
+
+	file *os.File
 }
 
 func chunksEqual(a, b []bgzf.Chunk) bool {
@@ -106,7 +108,7 @@ func New(path string, workers ...int) (*Bix, error) {
 
 	buf := bufio.NewReaderSize(bgz, 16384)
 	h := make([]string, 0)
-	tbx := &Bix{bgzf: bgz, path: path, cache: make([]interfaces.IPosition, 0, 4000)}
+	tbx := &Bix{bgzf: bgz, path: path, cache: make([]interfaces.IPosition, 0, 4000), file: b}
 
 	l, err := buf.ReadString('\n')
 	if err != nil {
@@ -133,6 +135,11 @@ func New(path string, workers ...int) (*Bix, error) {
 
 	tbx.Index = idx
 	return tbx, nil
+}
+
+func (b *Bix) Close() error {
+	//tbx.bgzf.Close()
+	return b.file.Close()
 }
 
 // bixReader is return from Bix.Query() it meets the io.Reader interface
@@ -409,12 +416,21 @@ func (r *bixReader) Read(p []byte) (int, error) {
 
 type frdr struct {
 	io.Reader
-	h io.Reader
-	c *index.ChunkReader
+	h   io.Reader
+	c   *index.ChunkReader
+	bix *Bix
 }
 
 func (x frdr) Close() error {
-	return x.c.Close()
+	if x.bix != nil {
+		b := x.bix
+		x.bix = nil
+
+		return b.Close()
+
+	}
+	return nil
+
 }
 
 func (tbx *Bix) ChunkedReader(r tabix.Record, justChunk bool) (io.ReadCloser, error) {
@@ -447,7 +463,7 @@ func (tbx *Bix) ChunkedReader(r tabix.Record, justChunk bool) (io.ReadCloser, er
 		if tbx.Header != "" {
 			h := strings.NewReader(tbx.Header)
 			b := bufio.NewReader(io.MultiReader(h, chunkReader))
-			return frdr{b, h, chunkReader}, nil
+			return frdr{b, h, chunkReader, tbx}, nil
 		} else {
 			return chunkReader, nil
 		}
@@ -470,11 +486,6 @@ func (tbx *Bix) Query(chrom string, start int, end int, printHeader bool) (io.Re
 		rdr.(*bixReader).buf = []byte(tbx.Header)
 	}
 	return rdr, err
-}
-
-// Close closes the files associate with a Bix struct.
-func (tbx *Bix) Close() {
-	tbx.bgzf.Close()
 }
 
 func (tbx *Bix) AddInfoToHeader(id, number, vtype, desc string) {
