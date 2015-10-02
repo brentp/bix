@@ -3,12 +3,14 @@ package bix
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"io"
 	"log"
 	"os"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/biogo/hts/bgzf"
 	"github.com/biogo/hts/bgzf/index"
@@ -179,13 +181,13 @@ func (r *bixReader) Close() error {
 	return r.cr.Close()
 }
 
-func (r *bixReader) inBounds(line string) (bool, error, []string) {
+func (r *bixReader) inBounds(line []byte) (bool, error, [][]byte) {
 
 	var readErr error
-	toks := strings.SplitN(line, "\t", r.maxCol+1)
-	toks[len(toks)-1] = strings.TrimRight(toks[len(toks)-1], "\r\n")
+	line = bytes.TrimRight(line, "\r\n")
+	toks := bytes.Split(line, []byte{'\t'}) //, r.maxCol+1)
 
-	s, err := strconv.Atoi(toks[r.startCol])
+	s, err := strconv.Atoi(unsafeString(toks[r.startCol]))
 	if err != nil {
 		return false, err, toks
 	}
@@ -196,7 +198,7 @@ func (r *bixReader) inBounds(line string) (bool, error, []string) {
 	}
 
 	if r.endCol != -1 {
-		e, err := strconv.Atoi(toks[r.endCol])
+		e, err := strconv.Atoi(unsafeString(toks[r.endCol]))
 		if err != nil {
 			return false, err, toks
 		}
@@ -205,7 +207,7 @@ func (r *bixReader) inBounds(line string) (bool, error, []string) {
 		}
 		return true, readErr, toks
 	} else if r.isVCF {
-		alt := strings.Split(toks[4], ",")
+		alt := strings.Split(string(toks[4]), ",")
 		lref := len(toks[3])
 		if r.start >= pos+lref {
 			for _, a := range alt {
@@ -215,7 +217,7 @@ func (r *bixReader) inBounds(line string) (bool, error, []string) {
 						return true, readErr, toks
 					}
 				} else if strings.HasPrefix(a, "<DEL") || strings.HasPrefix(a, "<DUP") || strings.HasPrefix(a, "<INV") || strings.HasPrefix(a, "<CN") {
-					info := toks[7]
+					info := string(toks[7])
 					if idx := strings.Index(info, ";END="); idx != -1 {
 						v := info[idx+5 : idx+5+strings.Index(info[idx+5:], ";")]
 						e, err := strconv.Atoi(v)
@@ -251,7 +253,7 @@ func (tbx *Bix) fillCache(br *bixReader) {
 	}
 	var err error
 	for err == nil {
-		line, err := br.rdr.ReadString('\n')
+		line, err := br.rdr.ReadBytes('\n')
 		if err != nil && err != io.EOF {
 			log.Println(err)
 			return
@@ -259,7 +261,7 @@ func (tbx *Bix) fillCache(br *bixReader) {
 		if len(line) == 0 || (err == io.EOF && line[len(line)-1] != '\n') {
 			return
 		}
-		toks := strings.SplitN(line, "\t", br.maxCol)
+		toks := bytes.SplitN(line, []byte{'\t'}, br.maxCol)
 		ip := tbx.toPosition(toks)
 		tbx.cache = append(tbx.cache, ip)
 	}
@@ -296,7 +298,7 @@ func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 			}
 			k += 1
 		} else {
-			line, err := br.rdr.ReadString('\n')
+			line, err := br.rdr.ReadBytes('\n')
 
 			if err != nil && err != io.EOF {
 				log.Println(err)
@@ -330,7 +332,7 @@ func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
 	return overlaps
 }
 
-func (tbx *Bix) toPosition(toks []string) interfaces.IPosition {
+func (tbx *Bix) toPosition(toks [][]byte) interfaces.IPosition {
 	isVCF := tbx.vReader != nil
 
 	if isVCF {
@@ -344,30 +346,33 @@ func (tbx *Bix) toPosition(toks []string) interfaces.IPosition {
 	}
 }
 
+func unsafeString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
+}
+
 // return an interval using the info from the tabix index
-func newgeneric(fields []string, chromCol int, startCol int, endCol int, zeroBased bool) (*parsers.Interval, error) {
-	s, err := strconv.Atoi(fields[startCol])
+func newgeneric(fields [][]byte, chromCol int, startCol int, endCol int, zeroBased bool) (*parsers.Interval, error) {
+	s, err := strconv.Atoi(unsafeString(fields[startCol]))
 	if err != nil {
 		return nil, err
 	}
 	if !zeroBased {
 		s -= 1
 	}
-	e, err := strconv.Atoi(fields[endCol])
+	e, err := strconv.Atoi(unsafeString(fields[endCol]))
 	if err != nil {
 		return nil, err
 	}
-
-	return parsers.NewInterval(fields[chromCol], uint32(s), uint32(e), fields, uint32(0), nil), nil
+	return parsers.NewInterval(string(fields[chromCol]), uint32(s), uint32(e), fields, uint32(0), nil), nil
 }
 
 // Read from a BixReader (will contain only overlapping intervals).
 func (r *bixReader) Read(p []byte) (int, error) {
 	var readErr error
-	var line string
+	var line []byte
 
 	for len(r.buf) < len(p) {
-		line, readErr = r.rdr.ReadString('\n')
+		line, readErr = r.rdr.ReadBytes('\n')
 		if readErr == io.EOF {
 			if len(line) == 0 {
 				break
@@ -439,9 +444,13 @@ func (tbx *Bix) ChunkedReader(r tabix.Record, justChunk bool) (io.ReadCloser, er
 	}
 	if justChunk {
 
-		h := strings.NewReader(tbx.Header)
-		b := bufio.NewReader(io.MultiReader(h, chunkReader))
-		return frdr{b, h, chunkReader}, nil
+		if tbx.Header != "" {
+			h := strings.NewReader(tbx.Header)
+			b := bufio.NewReader(io.MultiReader(h, chunkReader))
+			return frdr{b, h, chunkReader}, nil
+		} else {
+			return chunkReader, nil
+		}
 	}
 	rdr, err := newReader(tbx, chunkReader, r.Start(), r.End())
 	if err != nil {
