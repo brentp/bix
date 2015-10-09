@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -142,209 +141,12 @@ func (b *Bix) Close() error {
 	return b.file.Close()
 }
 
-// bixReader is return from Bix.Query() it meets the io.Reader interface
-type bixReader struct {
-	startCol int
-	endCol   int
-	maxCol   int
-	add      int
-
-	start int
-	end   int
-
-	cr    *index.ChunkReader
-	rdr   *bufio.Reader
-	isVCF bool
-
-	buf []byte
-}
-
-func newReader(tbx *Bix, cr *index.ChunkReader, start, end int) (io.ReadCloser, error) {
-	r := &bixReader{}
-	r.startCol = int(tbx.BeginColumn - 1)
-	r.endCol = int(tbx.EndColumn - 1)
-	r.maxCol = r.endCol
-	if r.startCol > r.endCol {
-		r.maxCol = r.startCol
-	}
-	r.start = start
-	r.end = end
-	r.maxCol += 2
-	if !tbx.ZeroBased {
-		r.add = -1
-	}
-	r.rdr = bufio.NewReader(cr)
-	r.cr = cr
-	r.buf = make([]byte, 0)
-	r.isVCF = strings.HasSuffix(tbx.path, ".vcf.gz")
-	if r.isVCF {
-		r.maxCol = 9
-	}
-
-	return r, nil
-}
-
-func (r *bixReader) Close() error {
-	return r.cr.Close()
-}
-
-func (r *bixReader) inBounds(line []byte) (bool, error, [][]byte) {
-
-	var readErr error
-	line = bytes.TrimRight(line, "\r\n")
-	toks := bytes.Split(line, []byte{'\t'}) //, r.maxCol+1)
-
-	s, err := strconv.Atoi(unsafeString(toks[r.startCol]))
-	if err != nil {
-		return false, err, toks
-	}
-
-	pos := s + r.add
-	if pos >= r.end {
-		return false, io.EOF, toks
-	}
-
-	if r.endCol != -1 {
-		e, err := strconv.Atoi(unsafeString(toks[r.endCol]))
-		if err != nil {
-			return false, err, toks
-		}
-		if e < r.start {
-			return false, readErr, toks
-		}
-		return true, readErr, toks
-	} else if r.isVCF {
-		alt := strings.Split(string(toks[4]), ",")
-		lref := len(toks[3])
-		if r.start >= pos+lref {
-			for _, a := range alt {
-				if a[0] != '<' {
-					e := pos + lref
-					if e > r.start {
-						return true, readErr, toks
-					}
-				} else if strings.HasPrefix(a, "<DEL") || strings.HasPrefix(a, "<DUP") || strings.HasPrefix(a, "<INV") || strings.HasPrefix(a, "<CN") {
-					info := string(toks[7])
-					if idx := strings.Index(info, ";END="); idx != -1 {
-						v := info[idx+5 : idx+5+strings.Index(info[idx+5:], ";")]
-						e, err := strconv.Atoi(v)
-						if err != nil {
-							return false, err, toks
-						}
-						if e > r.start {
-							return true, readErr, toks
-						}
-					} else {
-						log.Println("no end")
-					}
-				}
-			}
-		} else {
-			return true, readErr, toks
-		}
-		return false, readErr, toks
-	}
-	return false, readErr, toks
-
-}
-
-func (tbx *Bix) fillCache(br *bixReader) {
-	// this is a naive cache. It just parses the entire chunk.
-	// Even if we only read up to the requested location, then
-	// a Future Bix.Get() call would have a new reader and it would
-	// have to bgzf.Read() again through the block, past what we already
-	// knew. We could do one big Read(), then just parse each time, but
-	// this version actually works quite well.
-	if len(tbx.cache) != 0 {
-		return
-	}
-	var err error
-	for err == nil {
-		line, err := br.rdr.ReadBytes('\n')
-		if err != nil && err != io.EOF {
-			log.Println(err)
-			return
-		}
-		if len(line) == 0 || (err == io.EOF && line[len(line)-1] != '\n') {
-			return
-		}
-		toks := bytes.SplitN(line, []byte{'\t'}, br.maxCol)
-		ip := tbx.toPosition(toks)
-		tbx.cache = append(tbx.cache, ip)
-	}
-
-}
-
-func (tbx *Bix) Get(q interfaces.IPosition) []interfaces.IPosition {
-	overlaps := make([]interfaces.IPosition, 0)
-	chunkReader, err := tbx.ChunkedReader(location{q.Chrom(), int(q.Start()), int(q.End())}, false)
-
-	if err != nil {
-		return overlaps
-	}
-	br := chunkReader.(*bixReader)
-
-	var k int
-	sizeCutoff := uint32(65536 / 2)
-
-	if len(tbx.cache) == 0 && q.End()-q.Start() < sizeCutoff {
-		tbx.fillCache(br)
-	}
-	for {
-		if q.End()-q.Start() < sizeCutoff {
-			if k >= len(tbx.cache) {
-				break
-			}
-			v := tbx.cache[k]
-			if v != nil {
-				if interfaces.OverlapsPosition(v, q) {
-					overlaps = append(overlaps, v)
-				} else if v.Start() >= q.End() {
-					break
-				}
-			}
-			k += 1
-		} else {
-			line, err := br.rdr.ReadBytes('\n')
-
-			if err != nil && err != io.EOF {
-				log.Println(err)
-				break
-			}
-			if len(line) == 0 || (err == io.EOF && line[len(line)-1] != '\n') {
-				break
-			}
-			k += 1
-			if err != nil {
-				log.Println(err)
-			}
-			in, rerr, toks := br.inBounds(line)
-
-			if !in {
-				if rerr == io.EOF {
-					err = io.EOF
-					break
-				}
-				continue
-			}
-			ip := tbx.toPosition(toks)
-			if ip != nil {
-				overlaps = append(overlaps, ip)
-			}
-			if err == io.EOF {
-				break
-			}
-		}
-	}
-	return overlaps
-}
-
-func (tbx *Bix) toPosition(toks [][]byte) interfaces.IPosition {
+func (tbx *Bix) toPosition(toks [][]byte) interfaces.Relatable {
 	isVCF := tbx.vReader != nil
 
 	if isVCF {
 		v := tbx.vReader.Parse(toks)
-		return v
+		return interfaces.AsRelatable(v)
 	} else {
 
 		g, _ := newgeneric(toks, int(tbx.Index.NameColumn-1), int(tbx.Index.BeginColumn-1),
@@ -373,47 +175,6 @@ func newgeneric(fields [][]byte, chromCol int, startCol int, endCol int, zeroBas
 	return parsers.NewInterval(string(fields[chromCol]), uint32(s), uint32(e), fields, uint32(0), nil), nil
 }
 
-// Read from a BixReader (will contain only overlapping intervals).
-func (r *bixReader) Read(p []byte) (int, error) {
-	var readErr error
-	var line []byte
-
-	for len(r.buf) < len(p) {
-		line, readErr = r.rdr.ReadBytes('\n')
-		if readErr == io.EOF {
-			if len(line) == 0 {
-				break
-			}
-		} else if readErr != nil {
-			log.Println(readErr)
-			break
-		}
-		var in bool
-		var err error
-		if in, err, _ = r.inBounds(line); in {
-			r.buf = append(r.buf, line...)
-		}
-		if err == io.EOF {
-			readErr = err
-			break
-		} else if err != nil {
-			log.Println(err)
-		}
-	}
-	if len(r.buf) >= len(p) {
-		copy(p, r.buf[:len(p)])
-		r.buf = r.buf[len(p):]
-		if len(r.buf) > 0 && readErr == io.EOF {
-			readErr = nil
-		}
-		return len(p), readErr
-	}
-	copy(p, r.buf)
-	l := len(r.buf)
-	r.buf = r.buf[:0]
-	return l, readErr
-}
-
 type frdr struct {
 	io.Reader
 	h   io.Reader
@@ -433,7 +194,7 @@ func (x frdr) Close() error {
 
 }
 
-func (tbx *Bix) ChunkedReader(r tabix.Record, justChunk bool) (io.ReadCloser, error) {
+func (tbx *Bix) ChunkedReader(r tabix.Record) (io.ReadCloser, error) {
 	chunks, err := tbx.Chunks(r)
 	if err == index.ErrNoReference {
 		l := location{r.RefName(), r.Start(), r.End()}
@@ -448,44 +209,50 @@ func (tbx *Bix) ChunkedReader(r tabix.Record, justChunk bool) (io.ReadCloser, er
 	if err != nil {
 		return nil, err
 	}
-
-	if !chunksEqual(chunks, tbx.lastChunks) {
-		(*tbx).lastChunks = chunks
-		tbx.cache = tbx.cache[:0]
-	}
-
 	chunkReader, err := index.NewChunkReader(tbx.bgzf, chunks)
 	if err != nil {
 		return nil, err
 	}
-	if justChunk {
 
-		if tbx.Header != "" {
-			h := strings.NewReader(tbx.Header)
-			b := bufio.NewReader(io.MultiReader(h, chunkReader))
-			return frdr{b, h, chunkReader, tbx}, nil
-		} else {
-			return chunkReader, nil
-		}
+	if tbx.Header != "" {
+		h := strings.NewReader(tbx.Header)
+		b := io.MultiReader(h, chunkReader)
+		return frdr{b, h, chunkReader, tbx}, nil
+	} else {
+		return chunkReader, nil
 	}
-	rdr, err := newReader(tbx, chunkReader, r.Start(), r.End())
-	if err != nil {
-		return nil, err
-	}
-	return rdr, nil
 }
 
-// Query a Bix struct with genomic coordinates. Returns an io.Reader.
-func (tbx *Bix) Query(chrom string, start int, end int, printHeader bool) (io.ReadCloser, error) {
+// bixerator meets interfaces.RelatableIterator
+type bixerator struct {
+	rdr io.ReadCloser
+	buf *bufio.Reader
+	tbx *Bix
+}
 
-	rdr, err := (*tbx).ChunkedReader(location{chrom: chrom, start: start, end: end}, false)
+func (b bixerator) Next() (interfaces.Relatable, error) {
+	line, err := b.buf.ReadBytes('\n')
+	if err == io.EOF && len(line) == 0 {
+		return nil, io.EOF
+	} else if err != nil {
+		return nil, err
+	}
+	toks := bytes.Split(line, []byte{'\t'})
+	return b.tbx.toPosition(toks), nil
+}
+
+func (b bixerator) Close() error {
+	return b.rdr.Close()
+}
+
+var _ interfaces.RelatableIterator = bixerator{}
+
+func (tbx *Bix) Query(region interfaces.IPosition) (interfaces.RelatableIterator, error) {
+	cr, err := tbx.ChunkedReader(location{chrom: region.Chrom(), start: int(region.Start()), end: int(region.End())})
 	if err != nil {
 		return nil, err
 	}
-	if printHeader {
-		rdr.(*bixReader).buf = []byte(tbx.Header)
-	}
-	return rdr, err
+	return bixerator{cr, bufio.NewReader(cr), tbx}, nil
 }
 
 func (tbx *Bix) AddInfoToHeader(id, number, vtype, desc string) {
