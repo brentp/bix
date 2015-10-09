@@ -194,15 +194,16 @@ func (tbx *Bix) ChunkedReader(r tabix.Record) (io.ReadCloser, error) {
 			chunks, err = tbx.Chunks(l)
 		}
 	}
+	if err == index.ErrInvalid {
+		return index.NewChunkReader(tbx.bgzf, []bgzf.Chunk{})
+	} else if err != nil {
+		return nil, err
+	}
+	cr, err := index.NewChunkReader(tbx.bgzf, chunks)
 	if err != nil {
 		return nil, err
 	}
-	chunkReader, err := index.NewChunkReader(tbx.bgzf, chunks)
-	if err != nil {
-		return nil, err
-	}
-
-	return chunkReader, nil
+	return cr, nil
 }
 
 // bixerator meets interfaces.RelatableIterator
@@ -251,12 +252,7 @@ func (b bixerator) Next() (interfaces.Relatable, error) {
 }
 
 func (b bixerator) Close() error {
-	if b.rdr != nil {
-		err := b.rdr.Close()
-		b.rdr = nil
-		return err
-	}
-	return nil
+	return b.tbx.Close()
 }
 
 var _ interfaces.RelatableIterator = bixerator{}
