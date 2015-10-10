@@ -7,7 +7,7 @@ import (
 	"strconv"
 
 	"github.com/brentp/bix"
-	"github.com/brentp/vcfgo"
+	"github.com/brentp/irelate/interfaces"
 )
 
 func check(e error) {
@@ -53,9 +53,15 @@ func main() {
 	e, err := strconv.Atoi(os.Args[4])
 	check(err)
 
-	vals := tbx.Get(loc{chrom, s, e})
-	for i := 0; i < len(vals); i++ {
-		fmt.Println(vals[i].(*vcfgo.Variant).String()[:40])
+	vals, _ := tbx.Query(loc{chrom, s, e})
+	i := 0
+	for {
+		v, err := vals.Next()
+		if err != nil {
+			break
+		}
+		fmt.Println(v.(interfaces.IVariant).String()[:40])
+		i++
 	}
 	tbx.Close()
 

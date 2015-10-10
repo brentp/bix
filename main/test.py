@@ -50,11 +50,11 @@ for chrom, position in positions:
             #btres = btrun(F, '1', j, j + 5)
             bxres, cmd = bxrun(F, chrom, j, j + l)
             tbres = tbxrun(F, chrom, j, j + l)
-            bxres = bxres.stdout.read().rstrip()
-            tbres = tbres.stdout.read().rstrip()
+            bxres = bxres.stdout.read().strip()
+            tbres = tbres.stdout.read().strip()
 
             #lbt = len(btres.split("\n"))
-            lbx = len(bxres.split("\n"))
-            ltb = len(tbres.split("\n"))
+            lbx = len(bxres.split("\n")) if bxres else 0
+            ltb = len(tbres.split("\n")) if tbres else 0
 
             assert ltb == lbx, (F, chrom, position, j, j + l, ltb, lbx, cmd)
