@@ -45,11 +45,10 @@ func (s location) End() int {
 // Bix provides read access to tabix files.
 type Bix struct {
 	*tabix.Index
-	bgzf   *bgzf.Reader
-	path   string
-	Header string
+	bgzf *bgzf.Reader
+	path string
 
-	vReader *vcfgo.Reader
+	VReader *vcfgo.Reader
 
 	file *os.File
 	buf  *bufio.Reader
@@ -60,8 +59,7 @@ func newShort(old *Bix) (*Bix, error) {
 	tbx := &Bix{
 		Index:   old.Index,
 		path:    old.path,
-		vReader: old.vReader,
-		Header:  old.Header,
+		VReader: old.VReader,
 	}
 	var err error
 	tbx.file, err = os.Open(tbx.path)
@@ -128,12 +126,13 @@ func New(path string, workers ...int) (*Bix, error) {
 			return tbx, err
 		}
 	}
-	tbx.Header = strings.Join(h, "")
+	header := strings.Join(h, "")
 
 	if len(h) > 0 && strings.HasSuffix(tbx.path, ".vcf.gz") {
-		rdr := strings.NewReader(tbx.Header)
 		var err error
-		tbx.vReader, err = vcfgo.NewReader(rdr, true)
+		h := strings.NewReader(header)
+
+		tbx.VReader, err = vcfgo.NewReader(h, true)
 		if err != nil {
 			return nil, err
 		}
@@ -150,10 +149,10 @@ func (b *Bix) Close() error {
 }
 
 func (tbx *Bix) toPosition(toks [][]byte) interfaces.Relatable {
-	isVCF := tbx.vReader != nil
+	isVCF := tbx.VReader != nil
 
 	if isVCF {
-		v := tbx.vReader.Parse(toks)
+		v := tbx.VReader.Parse(toks)
 		return interfaces.AsRelatable(v)
 	} else {
 		g, _ := newgeneric(toks, int(tbx.Index.NameColumn-1), int(tbx.Index.BeginColumn-1),
@@ -286,10 +285,10 @@ func (tbx *Bix) Query(region interfaces.IPosition) (interfaces.RelatableIterator
 }
 
 func (tbx *Bix) AddInfoToHeader(id, number, vtype, desc string) {
-	if tbx.vReader == nil {
+	if tbx.VReader == nil {
 		return
 	}
-	tbx.vReader.AddInfoToHeader(id, number, vtype, desc)
+	tbx.VReader.AddInfoToHeader(id, number, vtype, desc)
 }
 
 func (b *bixerator) inBounds(line []byte) (bool, error, [][]byte) {
@@ -320,7 +319,7 @@ func (b *bixerator) inBounds(line []byte) (bool, error, [][]byte) {
 			return false, readErr, toks
 		}
 		return true, readErr, toks
-	} else if b.tbx.vReader != nil {
+	} else if b.tbx.VReader != nil {
 		start := int(b.region.Start())
 		alt := strings.Split(string(toks[4]), ",")
 		lref := len(toks[3])
