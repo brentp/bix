@@ -240,7 +240,11 @@ func (b bixerator) Next() (interfaces.Relatable, error) {
 				return nil, err
 			}
 		} else {
-			toks = bytes.Split(line, []byte{'\t'})
+			if b.tbx.VReader != nil {
+				toks = bytes.SplitN(line, []byte{'\t'}, 10)
+			} else {
+				toks = bytes.Split(line, []byte{'\t'})
+			}
 		}
 
 		if in {
@@ -295,7 +299,12 @@ func (b *bixerator) inBounds(line []byte) (bool, error, [][]byte) {
 
 	var readErr error
 	line = bytes.TrimRight(line, "\r\n")
-	toks := bytes.Split(line, []byte{'\t'}) //, r.maxCol+1)
+	var toks [][]byte
+	if b.tbx.VReader != nil {
+		toks = bytes.SplitN(line, []byte{'\t'}, 10)
+	} else {
+		toks = bytes.Split(line, []byte{'\t'})
+	}
 
 	s, err := strconv.Atoi(unsafeString(toks[b.tbx.BeginColumn-1]))
 	if err != nil {
