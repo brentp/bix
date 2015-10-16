@@ -195,6 +195,9 @@ func (tbx *Bix) ChunkedReader(r tabix.Record) (io.ReadCloser, error) {
 	}
 	if err == index.ErrInvalid {
 		return index.NewChunkReader(tbx.bgzf, []bgzf.Chunk{})
+	} else if err == index.ErrNoReference {
+		log.Printf("chromosome %s not found in %s\n", r.RefName(), tbx.path)
+		return index.NewChunkReader(tbx.bgzf, []bgzf.Chunk{})
 	} else if err != nil {
 		return nil, err
 	}
