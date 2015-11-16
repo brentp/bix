@@ -286,6 +286,9 @@ func (tbx *Bix) Query(region interfaces.IPosition) (interfaces.RelatableIterator
 	}
 	cr, err := tbx2.ChunkedReader(location{chrom: region.Chrom(), start: int(region.Start()), end: int(region.End())})
 	if err != nil {
+		if cr != nil {
+			cr.Close()
+		}
 		return nil, err
 	}
 	return bixerator{cr, bufio.NewReader(cr), tbx2, region}, nil
@@ -296,6 +299,13 @@ func (tbx *Bix) AddInfoToHeader(id, number, vtype, desc string) {
 		return
 	}
 	tbx.VReader.AddInfoToHeader(id, number, vtype, desc)
+}
+
+func (tbx *Bix) GetHeaderType(field string) string {
+	if tbx.VReader == nil {
+		return ""
+	}
+	return tbx.VReader.GetHeaderType(field)
 }
 
 func (b *bixerator) inBounds(line []byte) (bool, error, [][]byte) {
@@ -337,7 +347,7 @@ func (b *bixerator) inBounds(line []byte) (bool, error, [][]byte) {
 		lref := len(toks[3])
 		if start >= pos+lref {
 			for _, a := range alt {
-				if a[0] != '<' {
+				if a[0] != '<' || a == "<CN0>" {
 					e := pos + lref
 					if e > start {
 						return true, readErr, toks
@@ -354,7 +364,7 @@ func (b *bixerator) inBounds(line []byte) (bool, error, [][]byte) {
 							return true, readErr, toks
 						}
 					} else {
-						log.Println("no end")
+						log.Println("no end:", b.tbx.path, string(toks[0]), pos, string(toks[3]), a)
 					}
 				}
 			}
