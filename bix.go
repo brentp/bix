@@ -143,8 +143,8 @@ func New(path string, workers ...int) (*Bix, error) {
 }
 
 func (b *Bix) Close() error {
-	//b.bgzf.Close()
-	//b.file.Close()
+	b.bgzf.Close()
+	b.file.Close()
 	return nil
 }
 
@@ -160,6 +160,20 @@ func (tbx *Bix) toPosition(toks [][]byte) interfaces.Relatable {
 		return g
 	}
 }
+
+/*
+func (tbx *Bix) GetHeaderType(field string) string {
+	if tbx.VReader == nil {
+		return ""
+	}
+	hdr := tbx.VReader.Header
+
+	info, ok := hdr.Infos[field]
+	if !ok {
+		return ""
+	}
+	return info.Type
+}*/
 
 func unsafeString(b []byte) string {
 	return *(*string)(unsafe.Pointer(&b))
@@ -217,6 +231,33 @@ type bixerator struct {
 	region interfaces.IPosition
 }
 
+func makeFields(line []byte) [][]byte {
+	fields := make([][]byte, 9)
+	copy(fields[:8], bytes.SplitN(line, []byte{'\t'}, 8))
+	s := 0
+	for i, f := range fields {
+		if i == 7 {
+			break
+		}
+		s += len(f) + 1
+	}
+	e := bytes.IndexByte(line[s:], '\t')
+	if e == -1 {
+		e = len(line)
+	} else {
+		e += s
+	}
+
+	fields[7] = line[s:e]
+	if len(line) > e+1 {
+		fields[8] = line[e+1:]
+	} else {
+		fields = fields[:8]
+	}
+
+	return fields
+}
+
 func (b bixerator) Next() (interfaces.Relatable, error) {
 
 	for {
@@ -244,7 +285,7 @@ func (b bixerator) Next() (interfaces.Relatable, error) {
 			}
 		} else {
 			if b.tbx.VReader != nil {
-				toks = bytes.SplitN(line, []byte{'\t'}, 10)
+				toks = makeFields(line)
 			} else {
 				toks = bytes.Split(line, []byte{'\t'})
 			}
@@ -258,6 +299,7 @@ func (b bixerator) Next() (interfaces.Relatable, error) {
 }
 
 func (b bixerator) Close() error {
+	b.rdr.Close()
 	return b.tbx.Close()
 }
 
@@ -287,6 +329,7 @@ func (tbx *Bix) Query(region interfaces.IPosition) (interfaces.RelatableIterator
 	cr, err := tbx2.ChunkedReader(location{chrom: region.Chrom(), start: int(region.Start()), end: int(region.End())})
 	if err != nil {
 		if cr != nil {
+			tbx2.Close()
 			cr.Close()
 		}
 		return nil, err
@@ -314,7 +357,7 @@ func (b *bixerator) inBounds(line []byte) (bool, error, [][]byte) {
 	line = bytes.TrimRight(line, "\r\n")
 	var toks [][]byte
 	if b.tbx.VReader != nil {
-		toks = bytes.SplitN(line, []byte{'\t'}, 10)
+		toks = makeFields(line)
 	} else {
 		toks = bytes.Split(line, []byte{'\t'})
 	}
