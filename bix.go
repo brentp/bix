@@ -299,7 +299,9 @@ func (b bixerator) Next() (interfaces.Relatable, error) {
 }
 
 func (b bixerator) Close() error {
-	b.rdr.Close()
+	if b.rdr != nil {
+		b.rdr.Close()
+	}
 	return b.tbx.Close()
 }
 
