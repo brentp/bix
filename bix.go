@@ -15,6 +15,7 @@ import (
 	"github.com/biogo/hts/bgzf"
 	"github.com/biogo/hts/bgzf/index"
 	"github.com/biogo/hts/tabix"
+	"github.com/brentp/cgotbx"
 	"github.com/brentp/irelate/interfaces"
 	"github.com/brentp/irelate/parsers"
 	"github.com/brentp/vcfgo"
@@ -52,6 +53,7 @@ type Bix struct {
 
 	file *os.File
 	buf  *bufio.Reader
+	cgo  *cgotbx.Tbx
 }
 
 // create a new bix that does as little as possible from the old bix
@@ -137,14 +139,23 @@ func New(path string, workers ...int) (*Bix, error) {
 			return nil, err
 		}
 	}
+	tbx.cgo, err = cgotbx.New(path)
+	if err != nil {
+		return nil, err
+	}
+
 	tbx.buf = buf
 	tbx.Index = idx
 	return tbx, nil
 }
 
 func (b *Bix) Close() error {
-	b.bgzf.Close()
-	b.file.Close()
+	if b.bgzf != nil {
+		b.bgzf.Close()
+	}
+	if b.file != nil {
+		b.file.Close()
+	}
 	return nil
 }
 
@@ -195,7 +206,7 @@ func newgeneric(fields [][]byte, chromCol int, startCol int, endCol int, zeroBas
 	return parsers.NewInterval(string(fields[chromCol]), uint32(s), uint32(e), fields, uint32(0), nil), nil
 }
 
-func (tbx *Bix) ChunkedReader(r tabix.Record) (io.ReadCloser, error) {
+func (tbx *Bix) ChunkedReader(r tabix.Record) (io.Reader, error) {
 	chunks, err := tbx.Chunks(r)
 	if err == index.ErrNoReference {
 		l := location{r.RefName(), r.Start(), r.End()}
@@ -215,6 +226,14 @@ func (tbx *Bix) ChunkedReader(r tabix.Record) (io.ReadCloser, error) {
 	} else if err != nil {
 		return nil, err
 	}
+	/*
+		if len(chunks) == 1 && chunks[0].Begin.File == chunks[0].End.File {
+			//fmt.Fprintf(os.Stderr, "\n%+v\n%+v\n", r, chunks)
+			tbx.bgzf.Seek(chunks[0].Begin)
+			r := io.LimitReader(tbx.bgzf, int64(chunks[0].End.Block))
+			return r, nil
+		}*/
+
 	cr, err := index.NewChunkReader(tbx.bgzf, chunks)
 	if err != nil {
 		return nil, err
@@ -224,7 +243,7 @@ func (tbx *Bix) ChunkedReader(r tabix.Record) (io.ReadCloser, error) {
 
 // bixerator meets interfaces.RelatableIterator
 type bixerator struct {
-	rdr io.ReadCloser
+	rdr io.Reader
 	buf *bufio.Reader
 	tbx *Bix
 
@@ -274,33 +293,37 @@ func (b bixerator) Next() (interfaces.Relatable, error) {
 		if line[len(line)-1] == '\n' {
 			line = line[:len(line)-1]
 		}
-		var in bool = true
+		//var in bool = true
 		var toks [][]byte
-		if b.region != nil {
-			var err error
+		/*
+			if b.region != nil {
+				var err error
 
-			in, err, toks = b.inBounds(line)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			if b.tbx.VReader != nil {
-				toks = makeFields(line)
+				in, err, toks = b.inBounds(line)
+				if err != nil {
+					return nil, err
+				}
 			} else {
-				toks = bytes.Split(line, []byte{'\t'})
-			}
+		*/
+		if b.tbx.VReader != nil {
+			toks = makeFields(line)
+		} else {
+			toks = bytes.Split(line, []byte{'\t'})
 		}
+		//}
 
-		if in {
-			return b.tbx.toPosition(toks), nil
-		}
+		//if in {
+		return b.tbx.toPosition(toks), nil
+		//}
 	}
 	return nil, io.EOF
 }
 
 func (b bixerator) Close() error {
 	if b.rdr != nil {
-		b.rdr.Close()
+		if c, ok := b.rdr.(io.ReadCloser); ok {
+			c.Close()
+		}
 	}
 	return b.tbx.Close()
 }
@@ -308,35 +331,45 @@ func (b bixerator) Close() error {
 var _ interfaces.RelatableIterator = bixerator{}
 
 func (tbx *Bix) Query(region interfaces.IPosition) (interfaces.RelatableIterator, error) {
-	tbx2, err := newShort(tbx)
-	if err != nil {
-		return nil, err
-	}
-	if region == nil {
-		var l string
-		var err error
-		buf := bufio.NewReader(tbx2.bgzf)
-		l, err = buf.ReadString('\n')
-		for i := 0; i < int(tbx2.Index.Skip) || rune(l[0]) == tbx2.Index.MetaChar; i++ {
+	tbx2 := &Bix{VReader: tbx.VReader, Index: tbx.Index}
+	/*
+		tbx2, err := newShort(tbx)
+		if err != nil {
+			return nil, err
+		}
+		if region == nil {
+			var l string
+			var err error
+			buf := bufio.NewReader(tbx2.bgzf)
 			l, err = buf.ReadString('\n')
-			if err != nil {
-				return nil, err
+			for i := 0; i < int(tbx2.Index.Skip) || rune(l[0]) == tbx2.Index.MetaChar; i++ {
+				l, err = buf.ReadString('\n')
+				if err != nil {
+					return nil, err
+				}
 			}
-		}
-		if tbx2.Index.Skip == 0 && rune(l[0]) != tbx2.Index.MetaChar {
-			buf = bufio.NewReader(io.MultiReader(strings.NewReader(l), buf))
-		}
-		return bixerator{nil, buf, tbx2, region}, nil
-	}
-	cr, err := tbx2.ChunkedReader(location{chrom: region.Chrom(), start: int(region.Start()), end: int(region.End())})
+			if tbx2.Index.Skip == 0 && rune(l[0]) != tbx2.Index.MetaChar {
+				buf = bufio.NewReader(io.MultiReader(strings.NewReader(l), buf))
+			}
+			return bixerator{nil, buf, tbx2, region}, nil
+		}*/
+	//cr, err := tbx2.ChunkedReader(location{chrom: region.Chrom(), start: int(region.Start()), end: int(region.End())})
+	cr, err := tbx.cgo.Get(region.Chrom(), int(region.Start()), int(region.End()))
+
+	// return an empty iterator
 	if err != nil {
 		if cr != nil {
 			tbx2.Close()
-			cr.Close()
+			if c, ok := cr.(io.ReadCloser); ok {
+				c.Close()
+			}
 		}
 		return nil, err
 	}
-	return bixerator{cr, bufio.NewReader(cr), tbx2, region}, nil
+	if cr == nil {
+		return nil, nil
+	}
+	return bixerator{cr, bufio.NewReaderSize(cr, 8192), tbx2, region}, nil
 }
 
 func (tbx *Bix) AddInfoToHeader(id, number, vtype, desc string) {
