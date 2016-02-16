@@ -18,7 +18,9 @@ import (
 	"github.com/brentp/cgotbx"
 	"github.com/brentp/irelate/interfaces"
 	"github.com/brentp/irelate/parsers"
+	"github.com/brentp/pretab"
 	"github.com/brentp/vcfgo"
+	"github.com/brentp/xopen"
 )
 
 const (
@@ -54,6 +56,7 @@ type Bix struct {
 	file *os.File
 	buf  *bufio.Reader
 	cgo  *cgotbx.Tbx
+	pfi  *pretab.PFI
 }
 
 // create a new bix that does as little as possible from the old bix
@@ -71,6 +74,12 @@ func newShort(old *Bix) (*Bix, error) {
 	tbx.bgzf, err = bgzf.NewReader(tbx.file, 1)
 	if err != nil {
 		return nil, err
+	}
+	if xopen.Exists(tbx.path + ".pfi") {
+		tbx.pfi, err = pretab.ReadFrom(tbx.path + ".pfi")
+		if err != nil {
+			return nil, err
+		}
 	}
 	return tbx, nil
 }
@@ -115,6 +124,15 @@ func New(path string, workers ...int) (*Bix, error) {
 	buf := bufio.NewReaderSize(bgz, 16384)
 	h := make([]string, 0)
 	tbx := &Bix{bgzf: bgz, path: path, file: b}
+	if xopen.Exists(tbx.path + ".pfi") {
+		log.Println("got pfi for", tbx.path)
+		tbx.pfi, err = pretab.ReadFrom(tbx.path + ".pfi")
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		log.Println("no pfi for", tbx.path)
+	}
 
 	l, err := buf.ReadString('\n')
 	if err != nil {
@@ -331,6 +349,16 @@ func (b bixerator) Close() error {
 var _ interfaces.RelatableIterator = bixerator{}
 
 func (tbx *Bix) Query(region interfaces.IPosition) (interfaces.RelatableIterator, error) {
+	if tbx.pfi != nil && region.End()-region.Start() < 50 {
+		if !tbx.pfi.Contains(region.Chrom(), int(region.Start()), int(region.End())) {
+			//			fmt.Fprintln(os.Stderr, "skip")
+			return nil, nil
+		}
+		//		fmt.Fprintln(os.Stderr, "found")
+	} else {
+		//		fmt.Fprintln(os.Stderr, "toobig")
+	}
+
 	tbx2 := &Bix{VReader: tbx.VReader, Index: tbx.Index}
 	/*
 		tbx2, err := newShort(tbx)
