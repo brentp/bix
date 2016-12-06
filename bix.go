@@ -20,28 +20,6 @@ import (
 	"github.com/brentp/vcfgo"
 )
 
-const (
-	VCF = iota
-	BED
-	GENERIC
-)
-
-type location struct {
-	chrom string
-	start int
-	end   int
-}
-
-func (s location) RefName() string {
-	return s.chrom
-}
-func (s location) Start() int {
-	return s.start
-}
-func (s location) End() int {
-	return s.end
-}
-
 // Bix provides read access to tabix files.
 type Bix struct {
 	*tabix.Index
@@ -108,15 +86,10 @@ func New(path string, workers ...int) (*Bix, error) {
 		return nil, err
 	}
 
-	/*
-		c := cache.NewFIFO(4)
-		bgz.SetCache(c)
-	*/
-
-	buf := bufio.NewReaderSize(bgz, 16384)
-	h := make([]string, 0)
+	var h []string
 	tbx := &Bix{bgzf: bgz, path: path, file: b}
 
+	buf := bufio.NewReader(bgz)
 	l, err := buf.ReadString('\n')
 	if err != nil {
 		return tbx, err
@@ -209,19 +182,19 @@ func newgeneric(fields [][]byte, chromCol int, startCol int, endCol int, zeroBas
 	return parsers.NewInterval(string(fields[chromCol]), uint32(s), uint32(e), fields, uint32(0), nil), nil
 }
 
-func (tbx *Bix) ChunkedReader(r tabix.Record) (io.ReadCloser, error) {
-	chunks, err := tbx.Chunks(r.RefName(), r.Start(), r.End())
+func (tbx *Bix) ChunkedReader(chrom string, start, end int) (io.ReadCloser, error) {
+	chunks, err := tbx.Chunks(chrom, start, end)
 	if err == index.ErrNoReference {
-		if strings.HasPrefix(r.RefName(), "chr") {
-			chunks, err = tbx.Chunks(r.RefName()[3:], r.Start(), r.End())
+		if strings.HasPrefix(chrom, "chr") {
+			chunks, err = tbx.Chunks(chrom[3:], start, end)
 		} else {
-			chunks, err = tbx.Chunks("chr"+r.RefName(), r.Start(), r.End())
+			chunks, err = tbx.Chunks("chr"+chrom, start, end)
 		}
 	}
 	if err == index.ErrInvalid {
 		return index.NewChunkReader(tbx.bgzf, []bgzf.Chunk{})
 	} else if err == index.ErrNoReference {
-		log.Printf("chromosome %s not found in %s\n", r.RefName(), tbx.path)
+		log.Printf("chromosome %s not found in %s\n", chrom, tbx.path)
 		return index.NewChunkReader(tbx.bgzf, []bgzf.Chunk{})
 	} else if err != nil {
 		return nil, err
@@ -285,7 +258,7 @@ func (b bixerator) Next() (interfaces.Relatable, error) {
 		if line[len(line)-1] == '\n' {
 			line = line[:len(line)-1]
 		}
-		var in bool = true
+		in := true
 		var toks [][]byte
 		if b.region != nil {
 			var err error
@@ -339,7 +312,8 @@ func (tbx *Bix) Query(region interfaces.IPosition) (interfaces.RelatableIterator
 		}
 		return bixerator{nil, buf, tbx2, region}, nil
 	}
-	cr, err := tbx2.ChunkedReader(location{chrom: region.Chrom(), start: int(region.Start()), end: int(region.End())})
+
+	cr, err := tbx2.ChunkedReader(region.Chrom(), int(region.Start()), int(region.End()))
 	if err != nil {
 		if cr != nil {
 			tbx2.Close()
