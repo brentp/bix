@@ -49,6 +49,8 @@ type Bix struct {
 	path string
 
 	VReader *vcfgo.Reader
+	// index for 'ref' and 'alt' columns if they were present.
+	refalt []int
 
 	file *os.File
 	buf  *bufio.Reader
@@ -60,6 +62,7 @@ func newShort(old *Bix) (*Bix, error) {
 		Index:   old.Index,
 		path:    old.path,
 		VReader: old.VReader,
+		refalt:  old.refalt,
 	}
 	var err error
 	tbx.file, err = os.Open(tbx.path)
@@ -136,6 +139,24 @@ func New(path string, workers ...int) (*Bix, error) {
 		if err != nil {
 			return nil, err
 		}
+	} else if len(h) > 0 {
+		htab := strings.Split(strings.TrimSpace(h[len(h)-1]), "\t")
+		// try to find ref and alternate columns to make an IREFALT
+		for i, hdr := range htab {
+			if l := strings.ToLower(hdr); l == "ref" || l == "reference" {
+				tbx.refalt = append(tbx.refalt, i)
+				break
+			}
+		}
+		for i, hdr := range htab {
+			if l := strings.ToLower(hdr); l == "alt" || l == "alternate" {
+				tbx.refalt = append(tbx.refalt, i)
+				break
+			}
+		}
+		if len(tbx.refalt) != 2 {
+			tbx.refalt = nil
+		}
 	}
 	tbx.buf = buf
 	tbx.Index = idx
@@ -150,30 +171,23 @@ func (b *Bix) Close() error {
 
 func (tbx *Bix) toPosition(toks [][]byte) interfaces.Relatable {
 	isVCF := tbx.VReader != nil
+	var g *parsers.Interval
 
 	if isVCF {
 		v := tbx.VReader.Parse(toks)
 		return interfaces.AsRelatable(v)
+
 	} else {
-		g, _ := newgeneric(toks, int(tbx.Index.NameColumn-1), int(tbx.Index.BeginColumn-1),
+		g, _ = newgeneric(toks, int(tbx.Index.NameColumn-1), int(tbx.Index.BeginColumn-1),
 			int(tbx.Index.EndColumn-1), tbx.Index.ZeroBased)
-		return g
 	}
+	if tbx.refalt != nil {
+		ra := parsers.RefAltInterval{Interval: *g}
+		ra.SetRefAlt(tbx.refalt)
+		return &ra
+	}
+	return g
 }
-
-/*
-func (tbx *Bix) GetHeaderType(field string) string {
-	if tbx.VReader == nil {
-		return ""
-	}
-	hdr := tbx.VReader.Header
-
-	info, ok := hdr.Infos[field]
-	if !ok {
-		return ""
-	}
-	return info.Type
-}*/
 
 func unsafeString(b []byte) string {
 	return *(*string)(unsafe.Pointer(&b))
