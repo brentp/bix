@@ -155,7 +155,7 @@ func (tbx *Bix) toPosition(toks [][]byte) interfaces.Relatable {
 			int(tbx.Index.EndColumn-1), tbx.Index.ZeroBased)
 	}
 	if tbx.refalt != nil {
-		ra := parsers.RefAltInterval{Interval: *g}
+		ra := parsers.RefAltInterval{Interval: *g, HasEnd: tbx.Index.EndColumn != tbx.Index.BeginColumn}
 		ra.SetRefAlt(tbx.refalt)
 		return &ra
 	}
