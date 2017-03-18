@@ -338,6 +338,16 @@ func (tbx *Bix) GetHeaderType(field string) string {
 	return tbx.VReader.GetHeaderType(field)
 }
 
+func (tbx *Bix) GetHeaderDescription(field string) string {
+	if tbx.VReader == nil {
+		return ""
+	}
+	if h, ok := tbx.VReader.Header.Infos[field]; ok {
+		return h.Description
+	}
+	return ""
+}
+
 func (tbx *Bix) GetHeaderNumber(field string) string {
 	if tbx.VReader == nil {
 		return "1"
