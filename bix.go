@@ -23,8 +23,9 @@ import (
 // Bix provides read access to tabix files.
 type Bix struct {
 	*tabix.Index
-	bgzf *bgzf.Reader
-	path string
+	bgzf    *bgzf.Reader
+	path    string
+	workers int
 
 	VReader *vcfgo.Reader
 	// index for 'ref' and 'alt' columns if they were present.
@@ -39,6 +40,7 @@ func newShort(old *Bix) (*Bix, error) {
 	tbx := &Bix{
 		Index:   old.Index,
 		path:    old.path,
+		workers: old.workers,
 		VReader: old.VReader,
 		refalt:  old.refalt,
 	}
@@ -47,7 +49,7 @@ func newShort(old *Bix) (*Bix, error) {
 	if err != nil {
 		return nil, err
 	}
-	tbx.bgzf, err = bgzf.NewReader(tbx.file, 1)
+	tbx.bgzf, err = bgzf.NewReader(tbx.file, old.workers)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +89,7 @@ func New(path string, workers ...int) (*Bix, error) {
 	}
 
 	var h []string
-	tbx := &Bix{bgzf: bgz, path: path, file: b}
+	tbx := &Bix{bgzf: bgz, path: path, file: b, workers: n}
 
 	buf := bufio.NewReader(bgz)
 	l, err := buf.ReadString('\n')
