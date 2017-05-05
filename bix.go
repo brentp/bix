@@ -18,6 +18,7 @@ import (
 	"github.com/brentp/irelate/interfaces"
 	"github.com/brentp/irelate/parsers"
 	"github.com/brentp/vcfgo"
+	"github.com/pkg/errors"
 )
 
 // Bix provides read access to tabix files.
@@ -47,11 +48,11 @@ func newShort(old *Bix) (*Bix, error) {
 	var err error
 	tbx.file, err = os.Open(tbx.path)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "bix: error (re)opening %s", tbx.path)
 	}
 	tbx.bgzf, err = bgzf.NewReader(tbx.file, old.workers)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "bix: error creating new bgzf reader for %s", tbx.file)
 	}
 	return tbx, nil
 }
@@ -60,19 +61,19 @@ func newShort(old *Bix) (*Bix, error) {
 func New(path string, workers ...int) (*Bix, error) {
 	f, err := os.Open(path + ".tbi")
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "bix: error on opening %s.tbi", path)
 	}
 	defer f.Close()
 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "bix: error on reading tabix index: %s.tbi", path)
 	}
 	defer gz.Close()
 
 	idx, err := tabix.ReadFrom(gz)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "bix: error parsing tabix index from: %s.tbi", path)
 	}
 	n := 1
 	if len(workers) > 0 {
@@ -85,7 +86,7 @@ func New(path string, workers ...int) (*Bix, error) {
 	}
 	bgz, err := bgzf.NewReader(b, n)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "bix: error opening bgzf reader for %s", path)
 	}
 
 	var h []string
@@ -94,14 +95,14 @@ func New(path string, workers ...int) (*Bix, error) {
 	buf := bufio.NewReader(bgz)
 	l, err := buf.ReadString('\n')
 	if err != nil {
-		return tbx, err
+		return tbx, errors.Wrapf(err, "bix: error reading line from %s", path)
 	}
 
 	for i := 0; i < int(idx.Skip) || rune(l[0]) == idx.MetaChar; i++ {
 		h = append(h, l)
 		l, err = buf.ReadString('\n')
 		if err != nil {
-			return tbx, err
+			return tbx, errors.Wrapf(err, "bix: error reading line from %s", path)
 		}
 	}
 	header := strings.Join(h, "")
@@ -199,11 +200,11 @@ func (tbx *Bix) ChunkedReader(chrom string, start, end int) (io.ReadCloser, erro
 		log.Printf("chromosome %s not found in %s\n", chrom, tbx.path)
 		return index.NewChunkReader(tbx.bgzf, []bgzf.Chunk{})
 	} else if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "bix: error reading Chunks from %s", tbx.path)
 	}
 	cr, err := index.NewChunkReader(tbx.bgzf, chunks)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "bix: error creating chunked reader from %s", tbx.path)
 	}
 	return cr, nil
 }
@@ -252,7 +253,7 @@ func (b bixerator) Next() (interfaces.Relatable, error) {
 		if err == io.EOF && len(line) == 0 {
 			return nil, io.EOF
 		} else if err != nil {
-			return nil, err
+			return nil, errors.Wrapf(err, "bix: error iterating on %s", b.tbx.path)
 		}
 		if len(line) == 0 {
 			return nil, io.EOF
