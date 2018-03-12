@@ -3,7 +3,7 @@ bix
 
 Tabix files in go.
 
-[![GoDoc] (https://godoc.org/github.com/brentp/bix?status.png)](https://godoc.org/github.com/brentp/bix)
+[![GoDoc](https://godoc.org/github.com/brentp/bix?status.png)](https://godoc.org/github.com/brentp/bix)
 
 
 `Bix`is a pure go tabix reader. Tabix has a minimum resolution of 16K bases. So, for dense annotations
