@@ -23,7 +23,7 @@ import (
 
 // Bix provides read access to tabix files.
 type Bix struct {
-	*tabix.Index
+	Index
 	bgzf    *bgzf.Reader
 	path    string
 	workers int
@@ -57,23 +57,44 @@ func newShort(old *Bix) (*Bix, error) {
 	return tbx, nil
 }
 
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // New returns a &Bix
 func New(path string, workers ...int) (*Bix, error) {
-	f, err := os.Open(path + ".tbi")
+	var idx Index
+	var ext string
+
+	if exists(path + ".csi") {
+		ext = ".csi"
+	} else {
+		ext = ".tbi"
+	}
+	f, err := os.Open(path + ext)
 	if err != nil {
-		return nil, errors.Wrapf(err, "bix: error on opening %s.tbi", path)
+		return nil, errors.Wrapf(err, "bix: error on opening %s%s", path, ext)
 	}
 	defer f.Close()
 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return nil, errors.Wrapf(err, "bix: error on reading tabix index: %s.tbi", path)
+		return nil, errors.Wrapf(err, "bix: error on reading tabix index: %s%s", path, ext)
 	}
 	defer gz.Close()
 
-	idx, err := tabix.ReadFrom(gz)
-	if err != nil {
-		return nil, errors.Wrapf(err, "bix: error parsing tabix index from: %s.tbi", path)
+	if ext == ".tbi" {
+		t, err := tabix.ReadFrom(gz)
+		if err != nil {
+			return nil, errors.Wrapf(err, "bix: error parsing tabix index from: %s.tbi", path)
+		}
+		idx = tIndex{t}
+	} else {
+		idx, err = NewCSI(gz)
+		if err != nil {
+			return nil, errors.Wrapf(err, "bix: error parsing tabix index from: %s.csi", path)
+		}
 	}
 	n := 1
 	if len(workers) > 0 {
@@ -98,7 +119,7 @@ func New(path string, workers ...int) (*Bix, error) {
 		return tbx, errors.Wrapf(err, "bix: error reading line from %s", path)
 	}
 
-	for i := 0; i < int(idx.Skip) || rune(l[0]) == idx.MetaChar; i++ {
+	for i := 0; i < int(idx.Skip()) || rune(l[0]) == idx.MetaChar(); i++ {
 		h = append(h, l)
 		l, err = buf.ReadString('\n')
 		if err != nil {
@@ -154,11 +175,11 @@ func (tbx *Bix) toPosition(toks [][]byte) interfaces.Relatable {
 		return interfaces.AsRelatable(v)
 
 	} else {
-		g, _ = newgeneric(toks, int(tbx.Index.NameColumn-1), int(tbx.Index.BeginColumn-1),
-			int(tbx.Index.EndColumn-1), tbx.Index.ZeroBased)
+		g, _ = newgeneric(toks, tbx.Index.NameColumn()-1, tbx.Index.BeginColumn()-1,
+			tbx.Index.EndColumn()-1, tbx.Index.ZeroBased())
 	}
 	if tbx.refalt != nil {
-		ra := parsers.RefAltInterval{Interval: *g, HasEnd: tbx.Index.EndColumn != tbx.Index.BeginColumn}
+		ra := parsers.RefAltInterval{Interval: *g, HasEnd: tbx.Index.EndColumn() != tbx.Index.BeginColumn()}
 		ra.SetRefAlt(tbx.refalt)
 		return &ra
 	}
@@ -228,6 +249,15 @@ func makeFields(line []byte) [][]byte {
 		}
 		s += len(f) + 1
 	}
+	/*
+		if s >= len(line) {
+			c := make([]string, len(fields))
+			for k, f := range fields {
+				c[k] = string(f)
+			}
+			log.Println(s, string(line), c)
+		}
+	*/
 	e := bytes.IndexByte(line[s:], '\t')
 	if e == -1 {
 		e = len(line)
@@ -304,13 +334,13 @@ func (tbx *Bix) Query(region interfaces.IPosition) (interfaces.RelatableIterator
 		var err error
 		buf := bufio.NewReader(tbx2.bgzf)
 		l, err = buf.ReadString('\n')
-		for i := 0; i < int(tbx2.Index.Skip) || rune(l[0]) == tbx2.Index.MetaChar; i++ {
+		for i := 0; i < tbx2.Index.Skip() || rune(l[0]) == tbx2.Index.MetaChar(); i++ {
 			l, err = buf.ReadString('\n')
 			if err != nil {
 				return nil, err
 			}
 		}
-		if tbx2.Index.Skip == 0 && rune(l[0]) != tbx2.Index.MetaChar {
+		if tbx2.Index.Skip() == 0 && rune(l[0]) != tbx2.Index.MetaChar() {
 			buf = bufio.NewReader(io.MultiReader(strings.NewReader(l), buf))
 		}
 		return bixerator{nil, buf, tbx2, region}, nil
@@ -319,8 +349,8 @@ func (tbx *Bix) Query(region interfaces.IPosition) (interfaces.RelatableIterator
 	cr, err := tbx2.ChunkedReader(region.Chrom(), int(region.Start()), int(region.End()))
 	if err != nil {
 		if cr != nil {
-			tbx2.Close()
 			cr.Close()
+			tbx2.Close()
 		}
 		return nil, err
 	}
@@ -372,21 +402,21 @@ func (b *bixerator) inBounds(line []byte) (bool, error, [][]byte) {
 		toks = bytes.Split(line, []byte{'\t'})
 	}
 
-	s, err := strconv.Atoi(unsafeString(toks[b.tbx.BeginColumn-1]))
+	s, err := strconv.Atoi(unsafeString(toks[b.tbx.BeginColumn()-1]))
 	if err != nil {
 		return false, err, toks
 	}
 
 	pos := s
-	if !b.tbx.ZeroBased {
+	if !b.tbx.ZeroBased() {
 		pos -= 1
 	}
 	if pos >= int(b.region.End()) {
 		return false, io.EOF, toks
 	}
 
-	if b.tbx.EndColumn != 0 {
-		e, err := strconv.Atoi(unsafeString(toks[b.tbx.EndColumn-1]))
+	if b.tbx.EndColumn() != 0 {
+		e, err := strconv.Atoi(unsafeString(toks[b.tbx.EndColumn()-1]))
 		if err != nil {
 			return false, err, toks
 		}
