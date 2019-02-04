@@ -36,6 +36,22 @@ type Bix struct {
 	buf  *bufio.Reader
 }
 
+func (tbx *Bix) init() error {
+	if tbx.file != nil {
+		return nil
+	}
+	var err error
+	tbx.file, err = os.Open(tbx.path)
+	if err != nil {
+		return errors.Wrapf(err, "bix: error (re)opening %s", tbx.path)
+	}
+	tbx.bgzf, err = bgzf.NewReader(tbx.file, tbx.workers)
+	if err != nil {
+		return errors.Wrapf(err, "bix: error creating new bgzf reader for %s", tbx.file)
+	}
+	return nil
+}
+
 // create a new bix that does as little as possible from the old bix
 func newShort(old *Bix) (*Bix, error) {
 	tbx := &Bix{
@@ -324,6 +340,25 @@ func (b bixerator) Close() error {
 
 var _ interfaces.RelatableIterator = bixerator{}
 
+// FastQuery allows extracting intervals from an indexed file. Use this function if
+// concurrency is *not* required, otherwise use Query
+func (tbx *Bix) FastQuery(region interfaces.IPosition) (interfaces.RelatableIterator, error) {
+	if err := tbx.init(); err != nil {
+		return nil, err
+	}
+	cr, err := tbx.ChunkedReader(region.Chrom(), int(region.Start()), int(region.End()))
+	if err != nil {
+		if cr != nil {
+			cr.Close()
+			tbx.Close()
+		}
+		return nil, err
+	}
+	return bixerator{cr, bufio.NewReader(cr), tbx, region}, nil
+}
+
+// Query allows extracting intervals from an indexed file. Use this function if
+// concurrency is required, otherwise use FastQuery
 func (tbx *Bix) Query(region interfaces.IPosition) (interfaces.RelatableIterator, error) {
 	tbx2, err := newShort(tbx)
 	if err != nil {
