@@ -47,7 +47,7 @@ func (tbx *Bix) init() error {
 	}
 	tbx.bgzf, err = bgzf.NewReader(tbx.file, tbx.workers)
 	if err != nil {
-		return errors.Wrapf(err, "bix: error creating new bgzf reader for %s", tbx.file)
+		return errors.Wrapf(err, "bix: error creating new bgzf reader for %v", tbx.path)
 	}
 	return nil
 }
@@ -68,7 +68,7 @@ func newShort(old *Bix) (*Bix, error) {
 	}
 	tbx.bgzf, err = bgzf.NewReader(tbx.file, old.workers)
 	if err != nil {
-		return nil, errors.Wrapf(err, "bix: error creating new bgzf reader for %s", tbx.file)
+		return nil, errors.Wrapf(err, "bix: error creating new bgzf reader for %v", tbx.path)
 	}
 	return tbx, nil
 }
@@ -144,7 +144,7 @@ func New(path string, workers ...int) (*Bix, error) {
 	}
 	header := strings.Join(h, "")
 
-	if len(h) > 0 && strings.HasSuffix(tbx.path, ".vcf.gz") {
+	if len(h) > 0 && (strings.HasSuffix(tbx.path, ".vcf.gz") || strings.HasSuffix(tbx.path, ".vcf.bgz")) {
 		var err error
 		h := strings.NewReader(header)
 
