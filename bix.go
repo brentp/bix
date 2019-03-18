@@ -472,7 +472,13 @@ func (b *bixerator) inBounds(line []byte) (bool, error, [][]byte) {
 					}
 				} else if strings.HasPrefix(a, "<DEL") || strings.HasPrefix(a, "<DUP") || strings.HasPrefix(a, "<INV") || strings.HasPrefix(a, "<CN") {
 					info := string(toks[7])
-					if idx := strings.Index(info, ";END="); idx != -1 {
+					var idx int
+					if idx = strings.Index(info, ";END="); idx == -1 {
+						if strings.HasPrefix(info, "END=") {
+							idx = 0
+						}
+					}
+					if idx != -1 {
 						v := info[idx+5 : idx+5+strings.Index(info[idx+5:], ";")]
 						e, err := strconv.Atoi(v)
 						if err != nil {
