@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/biogo/hts/bgzf"
@@ -78,6 +79,15 @@ func exists(path string) bool {
 	return err == nil
 }
 
+func getModTime(path string) time.Time {
+	if t, err := os.Stat(path); err != nil {
+		// ignore the error because we know the file exists from check below.
+		return time.Time{}
+	} else {
+		return t.ModTime()
+	}
+}
+
 // New returns a &Bix
 func New(path string, workers ...int) (*Bix, error) {
 	var idx Index
@@ -88,6 +98,10 @@ func New(path string, workers ...int) (*Bix, error) {
 	} else {
 		ext = ".tbi"
 	}
+	if getModTime(path).After(getModTime(path + ext)) {
+		log.Printf("warning: data file %s is modified more recently than its index.", path)
+	}
+
 	f, err := os.Open(path + ext)
 	if err != nil {
 		return nil, errors.Wrapf(err, "bix: error on opening %s%s", path, ext)
@@ -487,6 +501,7 @@ func (b *bixerator) inBounds(line []byte) (bool, error, [][]byte) {
 						if e > start {
 							return true, readErr, toks
 						}
+						return false, readErr, toks
 					} else {
 						log.Println("no end:", b.tbx.path, string(toks[0]), pos, string(toks[3]), a)
 					}
