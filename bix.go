@@ -486,24 +486,14 @@ func (b *bixerator) inBounds(line []byte) (bool, error, [][]byte) {
 					}
 				} else if strings.HasPrefix(a, "<DEL") || strings.HasPrefix(a, "<DUP") || strings.HasPrefix(a, "<INV") || strings.HasPrefix(a, "<CN") {
 					info := string(toks[7])
-					var idx int
-					if idx = strings.Index(info, ";END="); idx == -1 {
-						if strings.HasPrefix(info, "END=") {
-							idx = 0
-						}
-					}
-					if idx != -1 {
-						v := info[idx+5 : idx+5+strings.Index(info[idx+5:], ";")]
-						e, err := strconv.Atoi(v)
-						if err != nil {
-							return false, err, toks
-						}
+					e, err := extractEndValue(info)
+					if err != nil {
+						log.Println("no end:", b.tbx.path, string(toks[0]), pos, string(toks[3]), a)
+					} else {
 						if e > start {
 							return true, readErr, toks
 						}
 						return false, readErr, toks
-					} else {
-						log.Println("no end:", b.tbx.path, string(toks[0]), pos, string(toks[3]), a)
 					}
 				}
 			}
@@ -514,4 +504,41 @@ func (b *bixerator) inBounds(line []byte) (bool, error, [][]byte) {
 	}
 	return false, readErr, toks
 
+}
+
+// extractEndValue extracts the END value from a VCF INFO field string.
+// It handles cases where END= is at the beginning, middle, or end of the INFO field.
+// Returns the END value as an integer and any parsing error.
+func extractEndValue(info string) (int, error) {
+	var idx int
+	// Look for ;END= first (most common case)
+	if idx = strings.Index(info, ";END="); idx == -1 {
+		// Check if END= is at the beginning of the INFO field
+		if strings.HasPrefix(info, "END=") {
+			idx = 0
+		} else {
+			return 0, errors.New("END field not found")
+		}
+	}
+
+	// Skip past "END=" (idx points to either ';' or start of string)
+	var start int
+	if idx > 0 {
+		start = idx + 5 // skip ";END="
+	} else {
+		start = 4 // skip "END="
+	}
+
+	// Find the end of the END value (next semicolon or end of string)
+	end := strings.Index(info[start:], ";")
+	var endValue string
+	if end == -1 {
+		// END is the last field, take everything to the end
+		endValue = info[start:]
+	} else {
+		// END is followed by more fields
+		endValue = info[start : start+end]
+	}
+
+	return strconv.Atoi(endValue)
 }
