@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"encoding/binary"
 	"io"
 	"log"
 	"os"
@@ -119,6 +120,18 @@ func New(path string, workers ...int) (*Bix, error) {
 		if err != nil {
 			return nil, errors.Wrapf(err, "bix: error parsing tabix index from: %s.tbi", path)
 		}
+		if t == nil {
+			// biogo returns a nil index after reading the zero reference count,
+			// leaving the tabix configuration in the stream.
+			var config [7]int32
+			if err = binary.Read(gz, binary.LittleEndian, &config); err != nil {
+				return nil, errors.Wrapf(err, "bix: error parsing tabix index from: %s.tbi", path)
+			}
+			t = tabix.New()
+			t.Format, t.ZeroBased = byte(config[0]), config[0]&0x10000 != 0
+			t.NameColumn, t.BeginColumn, t.EndColumn = config[1], config[2], config[3]
+			t.MetaChar, t.Skip = rune(config[4]), config[5]
+		}
 		idx = tIndex{t}
 	} else {
 		idx, err = NewCSI(gz)
@@ -145,14 +158,17 @@ func New(path string, workers ...int) (*Bix, error) {
 
 	buf := bufio.NewReader(bgz)
 	l, err := buf.ReadString('\n')
-	if err != nil {
+	if err != nil && err != io.EOF {
 		return tbx, errors.Wrapf(err, "bix: error reading line from %s", path)
 	}
 
-	for i := 0; i < int(idx.Skip()) || rune(l[0]) == idx.MetaChar(); i++ {
+	for i := 0; len(l) > 0 && (i < idx.Skip() || rune(l[0]) == idx.MetaChar()); i++ {
 		h = append(h, l)
+		if err == io.EOF {
+			break
+		}
 		l, err = buf.ReadString('\n')
-		if err != nil {
+		if err != nil && err != io.EOF {
 			return tbx, errors.Wrapf(err, "bix: error reading line from %s", path)
 		}
 	}
@@ -383,13 +399,18 @@ func (tbx *Bix) Query(region interfaces.IPosition) (interfaces.RelatableIterator
 		var err error
 		buf := bufio.NewReader(tbx2.bgzf)
 		l, err = buf.ReadString('\n')
-		for i := 0; i < tbx2.Index.Skip() || rune(l[0]) == tbx2.Index.MetaChar(); i++ {
-			l, err = buf.ReadString('\n')
+		for i := 0; len(l) > 0 && (i < tbx2.Index.Skip() || rune(l[0]) == tbx2.Index.MetaChar()); i++ {
 			if err != nil {
-				return nil, err
+				l = ""
+				break
 			}
+			l, err = buf.ReadString('\n')
 		}
-		if tbx2.Index.Skip() == 0 && rune(l[0]) != tbx2.Index.MetaChar() {
+		if err != nil && err != io.EOF {
+			tbx2.Close()
+			return nil, err
+		}
+		if len(l) > 0 && rune(l[0]) != tbx2.Index.MetaChar() {
 			buf = bufio.NewReader(io.MultiReader(strings.NewReader(l), buf))
 		}
 		return bixerator{nil, buf, tbx2, region}, nil

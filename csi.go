@@ -118,6 +118,9 @@ func NewCSI(r io.Reader) (cIndex, error) {
 	ci.skip = int(binary.LittleEndian.Uint32(aux[20:24]))
 
 	L := int(binary.LittleEndian.Uint32(aux[24:28]))
+	if L == 0 {
+		return ci, nil
+	}
 	// ends in trailing '0' so we take all but the last one byte.
 	chroms := bytes.Split(aux[28:28+L-1], []byte{0})
 	ci.chroms = make([]string, len(chroms))
